@@ -4,7 +4,9 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ritik6559/cinch/internal/llm/openai"
@@ -30,6 +32,26 @@ func Definitions() []openai.Tool {
 		},
 		{
 			Type:        "function",
+			Name:        "write_file",
+			Description: "Write content to a file at a relative path. Creates the file (and missing parent directories) or overwrites it.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Relative path to the file, e.g. internal/agent/agent.go",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "Full contents to write to the file.",
+					},
+				},
+				"required":             []string{"path", "content"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Type:        "function",
 			Name:        "list_files",
 			Description: "List files and directories. Directories end with a slash.",
 			Parameters: map[string]any{
@@ -49,8 +71,9 @@ func Definitions() []openai.Tool {
 
 func Run(name, arguments string) string {
 	var args struct {
-		Path string `json:"path"`
-		Dir  string `json:"dir"`
+		Path    string `json:"path"`
+		Dir     string `json:"dir"`
+		Content string `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: bad arguments: " + err.Error()
@@ -63,6 +86,15 @@ func Run(name, arguments string) string {
 			return "error: " + err.Error()
 		}
 		return string(b)
+
+	case "write_file":
+		if err := os.MkdirAll(filepath.Dir(args.Path), 0o755); err != nil {
+			return "error: " + err.Error()
+		}
+		if err := os.WriteFile(args.Path, []byte(args.Content), 0o644); err != nil {
+			return "error: " + err.Error()
+		}
+		return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path)
 
 	case "list_files":
 		dir := args.Dir
