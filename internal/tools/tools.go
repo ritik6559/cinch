@@ -12,7 +12,27 @@ import (
 	"github.com/ritik6559/cinch/internal/llm/openai"
 )
 
-func Definitions() []openai.Tool {
+type Tools struct {
+	root string
+}
+
+func New(root string) (*Tools, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	return &Tools{root: abs}, nil
+}
+
+func (t *Tools) Root() string {
+	return t.root
+}
+
+func (t *Tools) Definitions() []openai.Tool {
 	return []openai.Tool{
 		{
 			Type:        "function",
@@ -52,6 +72,34 @@ func Definitions() []openai.Tool {
 		},
 		{
 			Type:        "function",
+			Name:        "edit_file",
+			Description: "Replace an exact string in a file. old_string must match the file exactly, including indentation, and must be unique unless replace_all is true.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Relative path to the file, e.g. internal/agent/agent.go",
+					},
+					"old_string": map[string]any{
+						"type":        "string",
+						"description": "Exact text to replace, including indentation. Must be unique in the file unless replace_all is set.",
+					},
+					"new_string": map[string]any{
+						"type":        "string",
+						"description": "Replacement text.",
+					},
+					"replace_all": map[string]any{
+						"type":        "boolean",
+						"description": "Replace every occurrence of old_string. Defaults to false.",
+					},
+				},
+				"required":             []string{"path", "old_string", "new_string"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Type:        "function",
 			Name:        "list_files",
 			Description: "List files and directories. Directories end with a slash.",
 			Parameters: map[string]any{
@@ -69,11 +117,14 @@ func Definitions() []openai.Tool {
 	}
 }
 
-func Run(name, arguments string) string {
+func (t *Tools) Run(name, arguments string) string {
 	var args struct {
-		Path    string `json:"path"`
-		Dir     string `json:"dir"`
-		Content string `json:"content"`
+		Path       string `json:"path"`
+		Dir        string `json:"dir"`
+		Content    string `json:"content"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: bad arguments: " + err.Error()
@@ -81,27 +132,44 @@ func Run(name, arguments string) string {
 
 	switch name {
 	case "read_file":
-		b, err := os.ReadFile(args.Path)
+		abs, err := t.resolve(args.Path)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+
+		b, err := os.ReadFile(abs)
 		if err != nil {
 			return "error: " + err.Error()
 		}
 		return string(b)
 
 	case "write_file":
-		if err := os.MkdirAll(filepath.Dir(args.Path), 0o755); err != nil {
+		abs, err := t.resolve(args.Path)
+		if err != nil {
 			return "error: " + err.Error()
 		}
-		if err := os.WriteFile(args.Path, []byte(args.Content), 0o644); err != nil {
+
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return "error: " + err.Error()
+		}
+		if err := os.WriteFile(abs, []byte(args.Content), 0o644); err != nil {
 			return "error: " + err.Error()
 		}
 		return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path)
+
+	case "edit_file":
+		return t.editFile(args.Path, args.OldString, args.NewString, args.ReplaceAll)
 
 	case "list_files":
 		dir := args.Dir
 		if dir == "" {
 			dir = "."
 		}
-		entries, err := os.ReadDir(dir)
+		abs, err := t.resolve(dir)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		entries, err := os.ReadDir(abs)
 		if err != nil {
 			return "error: " + err.Error()
 		}
@@ -116,4 +184,37 @@ func Run(name, arguments string) string {
 		return strings.Join(names, "\n")
 	}
 	return "error: unknown tool " + name
+}
+
+func (t *Tools) editFile(path, oldStr, newStr string, replaceAll bool) string {
+	abs, err := t.resolve(path)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if oldStr == "" {
+		return "error: old_string must not be empty"
+	}
+	if oldStr == newStr {
+		return "error: old_string and new_string must differ"
+	}
+	b, err := os.ReadFile(abs)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	n := strings.Count(string(b), oldStr)
+	switch {
+	case n == 0:
+		return "error: old_string not found in " + path
+	case n > 1 && !replaceAll:
+		return fmt.Sprintf("error: old_string appears %d times in %s; add surrounding context to make it unique or set replace_all", n, path)
+	}
+	count := 1
+	if replaceAll {
+		count = -1
+	}
+	updated := strings.Replace(string(b), oldStr, newStr, count)
+	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
+		return "error: " + err.Error()
+	}
+	return fmt.Sprintf("replaced %d occurrence(s) in %s", n, path)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/ritik6559/cinch/internal/agent"
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/llm/openai"
+	"github.com/ritik6559/cinch/internal/tools"
 )
 
 func main() {
@@ -19,7 +20,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	a := agent.New(openai.New(cfg.APIKey, cfg.Model), os.Stdout)
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cinch: ", err)
+		os.Exit(1)
+	}
+	
+	ts, err := tools.New(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cinch: ", err)
+		os.Exit(1)
+	}
+
+	a := agent.New(openai.New(cfg.APIKey, cfg.Model), ts, os.Stdout)
 	ctx := context.Background()
 
 	fmt.Println("cinch — ask about the files in this directory. ctrl-c to quit.")
