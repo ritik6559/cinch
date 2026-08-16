@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -73,7 +74,7 @@ func TestEditFileConfined(t *testing.T) {
 		"old_string": "original",
 		"new_string": "pwned",
 	})
-	_ = ts.Run("edit_file", string(args))
+	_ = ts.Run(context.Background(), "edit_file", string(args))
 
 	got, _ := os.ReadFile(victim)
 	if string(got) != "original" {
@@ -91,7 +92,7 @@ func TestWriteFileConfined(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": "sub/new.txt", "content": "hi"})
-	out := ts.Run("write_file", string(args))
+	out := ts.Run(context.Background(), "write_file", string(args))
 
 	if _, err := os.Stat(filepath.Join(root, "sub", "new.txt")); err != nil {
 		t.Fatalf("write_file did not create the file inside the workspace: %v; tool said: %s", err, out)
@@ -111,7 +112,7 @@ func TestReadFileSecretBlocked(t *testing.T) {
 	}
 
 	args, _ := json.Marshal(map[string]string{"path": ".env"})
-	out := ts.Run("read_file", string(args))
+	out := ts.Run(context.Background(), "read_file", string(args))
 	if want := "error: refusing to touch .env"; len(out) < len(want) || out[:len(want)] != want {
 		t.Fatalf("read_file on .env = %q, want refusal", out)
 	}

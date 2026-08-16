@@ -36,8 +36,6 @@ func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writ
 	}
 }
 
-// SetSystemPrompt replaces the default. M7 uses this to fold in the project's
-// AGENTS.md.
 func (a *Agent) SetSystemPrompt(s string) { a.system = s }
 
 func (a *Agent) Run(ctx context.Context, prompt string) error {
@@ -67,14 +65,14 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		for _, call := range calls {
 			summary := tools.Summary(call.Name, call.Arguments)
 			fmt.Fprintf(a.out, " -> %s\n", summary)
-			a.input = append(a.input, openai.ToolResult(call.CallID, a.execute(call, summary)))
+			a.input = append(a.input, openai.ToolResult(call.CallID, a.execute(ctx, call, summary)))
 		}
 	}
 
 	return fmt.Errorf("%w of %d", ErrMaxSteps, maxSteps)
 }
 
-func (a *Agent) execute(call openai.FunctionCall, summary string) string {
+func (a *Agent) execute(ctx context.Context, call openai.FunctionCall, summary string) string {
 	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
 		if !a.approver(call.Name, summary) {
 			return "denied: the user rejected this tool call. " +
@@ -82,5 +80,5 @@ func (a *Agent) execute(call openai.FunctionCall, summary string) string {
 		}
 	}
 
-	return a.tools.Run(call.Name, call.Arguments)
+	return a.tools.Run(ctx, call.Name, call.Arguments)
 }

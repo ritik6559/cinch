@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -81,7 +82,7 @@ func runRead(t *testing.T, ts *Tools, args map[string]any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ts.Run("read_file", string(b))
+	return ts.Run(context.Background(), "read_file", string(b))
 }
 
 // tenLines is 61 bytes: "line1\n"..."line9\n" (54) + "line10\n" (7).

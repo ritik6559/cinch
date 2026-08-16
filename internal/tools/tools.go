@@ -5,12 +5,17 @@ package tools
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ritik6559/cinch/internal/llm/openai"
@@ -26,6 +31,23 @@ const (
 	maxLineBytes = 1024 * 1024
 	maxLineOut   = 2000
 )
+
+const (
+	maxGrepMatches = 100
+	maxGrepLine    = 300
+	grepTimeout    = 15 * time.Second
+)
+
+var skipDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"bin":          true,
+	".venv":        true,
+	"__pycache__":  true,
+}
 
 func New(root string) (*Tools, error) {
 	abs, err := filepath.Abs(root)
@@ -134,19 +156,51 @@ func (t *Tools) Definitions() []openai.Tool {
 				"additionalProperties": false,
 			},
 		},
+		{
+			Type: "function",
+			Name: "grep",
+			Description: "Search file contents with a regular expression. Returns path:line:text for each match. " +
+				"Use this to locate code instead of reading files speculatively.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "Regular expression, RE2 syntax.",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Relative directory or file to search. Defaults to the workspace root.",
+					},
+					"glob": map[string]any{
+						"type":        "string",
+						"description": "Only search files whose name matches this pattern, e.g. *.go",
+					},
+					"case_insensitive": map[string]any{
+						"type":        "boolean",
+						"description": "Ignore case. Defaults to false.",
+					},
+				},
+				"required":             []string{"pattern"},
+				"additionalProperties": false,
+			},
+		},
 	}
 }
 
-func (t *Tools) Run(name, arguments string) string {
+func (t *Tools) Run(ctx context.Context, name, arguments string) string {
 	var args struct {
-		Path       string `json:"path"`
-		Dir        string `json:"dir"`
-		Content    string `json:"content"`
-		Offset     int    `json:"offset"`
-		Limit      int    `json:"limit"`
-		OldString  string `json:"old_string"`
-		NewString  string `json:"new_string"`
-		ReplaceAll bool   `json:"replace_all"`
+		Path            string `json:"path"`
+		Dir             string `json:"dir"`
+		Content         string `json:"content"`
+		Offset          int    `json:"offset"`
+		Limit           int    `json:"limit"`
+		OldString       string `json:"old_string"`
+		NewString       string `json:"new_string"`
+		ReplaceAll      bool   `json:"replace_all"`
+		Pattern         string `json:"pattern"`
+		Glob            string `json:"glob"`
+		CaseInsensitive bool   `json:"case_insensitive"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: bad arguments: " + err.Error()
@@ -195,8 +249,117 @@ func (t *Tools) Run(name, arguments string) string {
 			names = append(names, n)
 		}
 		return strings.Join(names, "\n")
+	case "grep":
+		return t.grep(ctx, args.Pattern, args.Path, args.Glob, args.CaseInsensitive)
 	}
 	return "error: unknown tool " + name
+}
+
+func (t *Tools) grep(ctx context.Context, pattern, path, glob string, insensitive bool) string {
+	if pattern == "" {
+		return "error: pattern is required"
+	}
+	if path == "" {
+		path = "."
+	}
+	if _, err := t.resolve(path); err != nil {
+		return "error: " + err.Error()
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, grepTimeout)
+	defer cancel()
+
+	if out, ok := t.ripgrep(ctx, pattern, path, glob, insensitive); ok {
+		return out
+	}
+	return t.grepWalk(ctx, pattern, path, glob, insensitive)
+}
+
+func (t *Tools) ripgrep(ctx context.Context, pattern, path, glob string, insensitive bool) (string, bool) {
+	bin, err := exec.LookPath("rg")
+	if err != nil {
+		return "", false
+	}
+
+	args := []string{"--line-number", "--no-heading", "--color", "never"}
+	if insensitive {
+		args = append(args, "--ignore-case")
+	}
+	if glob != "" {
+		args = append(args, "--glob", glob)
+	}
+	args = append(args, "--", pattern, path)
+
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Dir = t.root
+
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			switch exit.ExitCode() {
+			case 1:
+				return "no matches", true // rg's exit code for "found nothing"
+			case 2:
+				return "error: " + strings.TrimSpace(string(exit.Stderr)), true
+			}
+		}
+		return "", false
+	}
+	return formatMatches(strings.Split(strings.TrimRight(string(out), "\n"), "\n")), true
+}
+
+func (t *Tools) grepWalk(ctx context.Context, pattern, path, glob string, insensitive bool) string {
+	if insensitive {
+		pattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "error: bad pattern" + err.Error()
+	}
+
+	root, err := t.resolve(path)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+
+	var matches []string
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() {
+			if p != root && skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if secretFiles[d.Name()] {
+			return nil
+		}
+		if glob != "" {
+			if ok, _ := filepath.Match(glob, d.Name()); !ok {
+				return nil
+			}
+		}
+
+		rel, err := filepath.Rel(t.root, p)
+		if err != nil {
+			return nil
+		}
+		matches = append(matches, matchFile(p, filepath.ToSlash(rel), re)...)
+		if len(matches) >= maxGrepMatches {
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.SkipAll) {
+		return "error: " + err.Error()
+	}
+	return formatMatches(matches)
 }
 
 func (t *Tools) read_file(path string, offset, limit int) string {
@@ -337,14 +500,17 @@ func (t *Tools) NeedsApproval(name string) bool {
 
 func Summary(name, arguments string) string {
 	var args struct {
-		Path       string `json:"path"`
-		Dir        string `json:"dir"`
-		Content    string `json:"content"`
-		Offset     int    `json:"offset"`
-		Limit      int    `json:"limit"`
-		OldString  string `json:"old_string"`
-		NewString  string `json:"new_string"`
-		ReplaceAll bool   `json:"replace_all"`
+		Path            string `json:"path"`
+		Dir             string `json:"dir"`
+		Content         string `json:"content"`
+		Offset          int    `json:"offset"`
+		Limit           int    `json:"limit"`
+		OldString       string `json:"old_string"`
+		NewString       string `json:"new_string"`
+		ReplaceAll      bool   `json:"replace_all"`
+		Pattern         string `json:"pattern"`
+		Glob            string `json:"glob"`
+		CaseInsensitive bool   `json:"case_insensitive"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return name
@@ -368,6 +534,12 @@ func Summary(name, arguments string) string {
 			dir = "."
 		}
 		return "list files in " + dir
+		
+	case "grep":
+		if args.Path != "" {
+			return fmt.Sprintf("grep %q in %s", args.Pattern, args.Path)
+		}
+		return fmt.Sprintf("grep %q", args.Pattern)
 	}
 	return "error: unknown tool " + name
 }
@@ -388,4 +560,63 @@ func snippet(s string) string {
 		return fmt.Sprintf("%q (+%d lines)", first, extra)
 	}
 	return fmt.Sprintf("%q", first)
+}
+
+func matchFile(abs, rel string, re *regexp.Regexp) []string {
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+	if head, _ := r.Peek(512); bytes.IndexByte(head, 0) >= 0 {
+		return nil // binary
+	}
+
+	var out []string
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+
+	for n := 1; scanner.Scan(); n++ {
+		if re.MatchString(scanner.Text()) {
+			out = append(out, fmt.Sprintf("%s:%d:%s", rel, n, scanner.Text()))
+			if len(out) >= maxGrepMatches {
+				return out
+			}
+		}
+	}
+
+	// A scan that stopped early would otherwise return partial matches for this
+	// file with nothing to say so — a silently incomplete search across a repo.
+	if err := scanner.Err(); err != nil {
+		reason := err.Error()
+		if errors.Is(err, bufio.ErrTooLong) {
+			reason = "line too long; probably minified or generated"
+		}
+		out = append(out, fmt.Sprintf("%s: skipped: %s", rel, reason))
+	}
+	return out
+}
+
+func formatMatches(lines []string) string {
+	var out []string
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if len(line) > maxGrepLine {
+			line = line[:maxGrepLine] + "..."
+		}
+		out = append(out, line)
+		if len(out) == maxGrepMatches {
+			out = append(out, fmt.Sprintf(
+				"[truncated at %d matches: narrow the pattern, or set path or glob]", maxGrepMatches))
+			break
+		}
+	}
+	if len(out) == 0 {
+		return "no matches"
+	}
+	return strings.Join(out, "\n")
 }
