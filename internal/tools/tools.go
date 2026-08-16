@@ -248,10 +248,14 @@ func Summary(name, arguments string) string {
 		return fmt.Sprintf("write file %s (%s)", args.Path, byteCount(len(args.Content)))
 
 	case "edit_file":
-		return fmt.Sprintf("edit file %s: replace %q with %q", args.Path, args.OldString, args.NewString)
+		return fmt.Sprintf("edit file %s: replace %s with %s", args.Path, snippet(args.OldString), snippet(args.NewString))
 
 	case "list_files":
-		return "list files in " + args.Dir
+		dir := args.Dir
+		if dir == "" {
+			dir = "."
+		}
+		return "list files in " + dir
 	}
 	return "error: unknown tool " + name
 }
@@ -261,4 +265,15 @@ func byteCount(n int) string {
 		return fmt.Sprintf("%d B", n)
 	}
 	return fmt.Sprintf("%.1f KB", float64(n)/1024)
+}
+
+func snippet(s string) string {
+	first, _, _ := strings.Cut(s, "\n")
+	if r := []rune(first); len(r) > 60 {
+		first = string(r[:60]) + "…"
+	}
+	if extra := strings.Count(s, "\n"); extra > 0 {
+		return fmt.Sprintf("%q (+%d lines)", first, extra)
+	}
+	return fmt.Sprintf("%q", first)
 }
