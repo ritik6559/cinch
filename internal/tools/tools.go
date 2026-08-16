@@ -3,11 +3,15 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ritik6559/cinch/internal/llm/openai"
 )
@@ -15,6 +19,13 @@ import (
 type Tools struct {
 	root string
 }
+
+const (
+	maxReadLines = 2000
+	maxReadBytes = 64 * 1024
+	maxLineBytes = 1024 * 1024
+	maxLineOut   = 2000
+)
 
 func New(root string) (*Tools, error) {
 	abs, err := filepath.Abs(root)
@@ -35,15 +46,24 @@ func (t *Tools) Root() string {
 func (t *Tools) Definitions() []openai.Tool {
 	return []openai.Tool{
 		{
-			Type:        "function",
-			Name:        "read_file",
-			Description: "Read the contents of a file at a relative path.",
+			Type: "function",
+			Name: "read_file",
+			Description: "Read a text file. Output is line-numbered and capped; if it is truncated the result says so and gives the offset to continue from. " +
+				"Line numbers are display only — never include them in edit_file arguments.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
 						"description": "Relative path to the file, e.g. internal/agent/agent.go",
+					},
+					"offset": map[string]any{
+						"type":        "integer",
+						"description": "Number of lines to skip. Use the value suggested by a truncated read.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum lines to return. Defaults to 2000.",
 					},
 				},
 				"required":             []string{"path"},
@@ -122,6 +142,8 @@ func (t *Tools) Run(name, arguments string) string {
 		Path       string `json:"path"`
 		Dir        string `json:"dir"`
 		Content    string `json:"content"`
+		Offset     int    `json:"offset"`
+		Limit      int    `json:"limit"`
 		OldString  string `json:"old_string"`
 		NewString  string `json:"new_string"`
 		ReplaceAll bool   `json:"replace_all"`
@@ -132,16 +154,7 @@ func (t *Tools) Run(name, arguments string) string {
 
 	switch name {
 	case "read_file":
-		abs, err := t.resolve(args.Path)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-
-		b, err := os.ReadFile(abs)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return string(b)
+		return t.read_file(args.Path, args.Offset, args.Limit)
 
 	case "write_file":
 		abs, err := t.resolve(args.Path)
@@ -184,6 +197,100 @@ func (t *Tools) Run(name, arguments string) string {
 		return strings.Join(names, "\n")
 	}
 	return "error: unknown tool " + name
+}
+
+func (t *Tools) read_file(path string, offset, limit int) string {
+	abs, err := t.resolve(path)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if info.IsDir() {
+		return "error: " + path + " is a directory, use list_files"
+	}
+
+	f, err := os.Open(abs)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+
+	// A NUL byte in the first 512 is the heuristic git uses for "binary".
+	// Returning raw bytes would put thousands of junk tokens in the transcript.
+	if head, _ := r.Peek(512); bytes.IndexByte(head, 0) >= 0 {
+		return fmt.Sprintf("error: %s looks like a binary file (%s)",
+			path, byteCount(int(info.Size())))
+	}
+
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > maxReadLines {
+		limit = maxReadLines
+	}
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+
+	var (
+		out       strings.Builder
+		lineNo    int
+		emitted   int
+		bytesOut  int
+		truncated bool
+	)
+
+	for scanner.Scan() {
+		lineNo++
+		if lineNo <= offset {
+			continue
+		}
+
+		if emitted == limit || bytesOut > maxReadBytes {
+			truncated = true
+			break
+		}
+
+		line := scanner.Text()
+		if len(line) > maxLineOut {
+			// Back off to a rune boundary so we don't emit half a character.
+			cut := maxLineOut
+			for cut > 0 && !utf8.RuneStart(line[cut]) {
+				cut--
+			}
+			line = line[:cut] + "… [line truncated]"
+		}
+		fmt.Fprintf(&out, "%6d\t%s\n", lineNo, line)
+		bytesOut += len(line)
+		emitted++
+	}
+
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Sprintf("error: %s has a line longer than %s; it is probably minified or generated — edit_file can still match an exact substring of it",
+				path, byteCount(maxLineBytes))
+		}
+		return "error: " + err.Error()
+	}
+
+	if emitted == 0 {
+		if offset > 0 {
+			return fmt.Sprintf("no lines at offset %d in %s (file has %d lines)", offset, path, lineNo)
+		}
+		return "(empty file)"
+	}
+
+	if truncated {
+		fmt.Fprintf(&out, "\n[truncated: showing lines %d-%d, file is %s. Continue with offset=%d]\n",
+			offset+1, offset+emitted, byteCount(int(info.Size())), offset+emitted)
+	}
+	return out.String()
 }
 
 func (t *Tools) editFile(path, oldStr, newStr string, replaceAll bool) string {
@@ -233,6 +340,8 @@ func Summary(name, arguments string) string {
 		Path       string `json:"path"`
 		Dir        string `json:"dir"`
 		Content    string `json:"content"`
+		Offset     int    `json:"offset"`
+		Limit      int    `json:"limit"`
 		OldString  string `json:"old_string"`
 		NewString  string `json:"new_string"`
 		ReplaceAll bool   `json:"replace_all"`
@@ -242,6 +351,9 @@ func Summary(name, arguments string) string {
 	}
 	switch name {
 	case "read_file":
+		if args.Offset > 0 {
+			return fmt.Sprintf("read_file: %s (from line %d)", args.Path, args.Offset+1)
+		}
 		return "read_file: " + args.Path
 
 	case "write_file":
