@@ -15,15 +15,18 @@ const maxSteps = 25
 
 var ErrMaxSteps = errors.New("reached step limit")
 
+type Approver func(tool, summary string) bool
+
 type Agent struct {
-	client *openai.Client
-	tools *tools.Tools
-	out    io.Writer
-	input  []json.RawMessage
+	client   *openai.Client
+	tools    *tools.Tools
+	approver Approver
+	out      io.Writer
+	input    []json.RawMessage
 }
 
-func New(client *openai.Client, tls *tools.Tools, out io.Writer) *Agent {
-	return &Agent{client: client, tools: tls, out: out}
+func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
+	return &Agent{client: client, tools: tls, approver: approver, out: out}
 }
 
 func (a *Agent) Run(ctx context.Context, prompt string) error {
@@ -51,11 +54,22 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		}
 
 		for _, call := range calls {
-			fmt.Fprintf(a.out, " -> %s %s", call.Name, call.Arguments)
-			result := a.tools.Run(call.Name, call.Arguments)
-			a.input = append(a.input, openai.ToolResult(call.CallID, result))
+			summary := tools.Summary(call.Name, call.Arguments)
+			fmt.Fprintf(a.out, " -> %s\n", summary)
+			a.input = append(a.input, openai.ToolResult(call.CallID, a.execute(call, summary)))
 		}
 	}
 
 	return fmt.Errorf("%w of %d", ErrMaxSteps, maxSteps)
+}
+
+func (a *Agent) execute(call openai.FunctionCall, summary string) string {
+	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
+		if !a.approver(call.Name, summary) {
+			return "denied: the user rejected this tool call. " +
+				"Do not retry it — explain what you were going to do and ask how to proceed."
+		}
+	}
+
+	return a.tools.Run(call.Name, call.Arguments)
 }

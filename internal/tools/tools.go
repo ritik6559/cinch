@@ -218,3 +218,47 @@ func (t *Tools) editFile(path, oldStr, newStr string, replaceAll bool) string {
 	}
 	return fmt.Sprintf("replaced %d occurrence(s) in %s", n, path)
 }
+
+var mutating = map[string]bool{
+	"write_file": true,
+	"edit_file":  true,
+}
+
+func (t *Tools) NeedsApproval(name string) bool {
+	return mutating[name]
+}
+
+func Summary(name, arguments string) string {
+	var args struct {
+		Path       string `json:"path"`
+		Dir        string `json:"dir"`
+		Content    string `json:"content"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return name
+	}
+	switch name {
+	case "read_file":
+		return "read_file: " + args.Path
+
+	case "write_file":
+		return fmt.Sprintf("write file %s (%s)", args.Path, byteCount(len(args.Content)))
+
+	case "edit_file":
+		return fmt.Sprintf("edit file %s: replace %q with %q", args.Path, args.OldString, args.NewString)
+
+	case "list_files":
+		return "list files in " + args.Dir
+	}
+	return "error: unknown tool " + name
+}
+
+func byteCount(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f KB", float64(n)/1024)
+}

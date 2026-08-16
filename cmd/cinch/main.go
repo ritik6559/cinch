@@ -25,18 +25,38 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cinch: ", err)
 		os.Exit(1)
 	}
-	
+
 	ts, err := tools.New(root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cinch: ", err)
 		os.Exit(1)
 	}
+	scanner := bufio.NewScanner(os.Stdin)
 
-	a := agent.New(openai.New(cfg.APIKey, cfg.Model), ts, os.Stdout)
+	approve_always := map[string]bool{}
+
+	approve := func(tool, summary string) bool {
+		fmt.Printf("\nallow %s> [y/N/a] ", summary)
+		if !scanner.Scan() {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+		case "y", "yes":
+			return true
+		case "a", "always":
+			approve_always[tool] = true
+			return true
+		default:
+			return false
+		}
+	}
+
+	a := agent.New(openai.New(cfg.APIKey, cfg.Model), ts, func(tool, summary string) bool {
+		return approve_always[tool] || approve(tool, summary)
+	}, os.Stdout)
 	ctx := context.Background()
 
 	fmt.Println("cinch — ask about the files in this directory. ctrl-c to quit.")
-	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
 		fmt.Print("\nyou: ")
