@@ -50,14 +50,19 @@ type Response struct {
 }
 
 
-func (c *Client) Call(ctx context.Context, input []json.RawMessage, tools[] Tool) (*Response, error) {
-	body, err := json.Marshal(map[string]any{
-		"model": c.model,
-		"input": input,
-		"tools": tools,
-		"store": false,
+func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool) (*Response, error) {
+	payload := map[string]any{
+		"model":   c.model,
+		"input":   input,
+		"tools":   tools,
+		"store":   false,
 		"include": []string{"reasoning.encrypted_content"},
-	})
+	}
+	if system != "" {
+		payload["instructions"] = system
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}

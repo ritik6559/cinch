@@ -21,19 +21,30 @@ type Agent struct {
 	client   *openai.Client
 	tools    *tools.Tools
 	approver Approver
+	system   string
 	out      io.Writer
 	input    []json.RawMessage
 }
 
 func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
-	return &Agent{client: client, tools: tls, approver: approver, out: out}
+	return &Agent{
+		client:   client,
+		tools:    tls,
+		approver: approver,
+		system:   DefaultSystemPrompt,
+		out:      out,
+	}
 }
+
+// SetSystemPrompt replaces the default. M7 uses this to fold in the project's
+// AGENTS.md.
+func (a *Agent) SetSystemPrompt(s string) { a.system = s }
 
 func (a *Agent) Run(ctx context.Context, prompt string) error {
 	a.input = append(a.input, openai.UserMessage(prompt))
 
 	for step := range maxSteps {
-		resp, err := a.client.Call(ctx, a.input, a.tools.Definitions())
+		resp, err := a.client.Call(ctx, a.system, a.input, a.tools.Definitions())
 		if err != nil {
 			return err
 		}
