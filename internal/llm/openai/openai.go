@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/ritik6559/cinch/internal/version"
 )
 
 const apiUrl = "https://api.openai.com/v1/responses"
@@ -72,6 +74,7 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apikey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	httpResp, err := c.http.Do(req)
 	if err != nil {
