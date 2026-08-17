@@ -1,0 +1,105 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"text/tabwriter"
+
+	"github.com/ritik6559/cinch/internal/config"
+	"github.com/ritik6559/cinch/internal/version"
+)
+
+func doctorCmd() *Command {
+	return &Command{
+		Name:    "doctor",
+		Summary: "Check that the local setup is complete",
+		Usage:   "cinch doctor",
+		Run:     runDoctor,
+	}
+}
+
+type status int
+
+const (
+	pass status = iota 
+	warn             
+	fail              
+)
+
+func (s status) label() string {
+	switch s {
+	case pass:
+		return "ok"
+	case warn:
+		return "warn"
+	default:
+		return "fail"
+	}
+}
+
+type check struct {
+	name   string
+	status status
+	detail string
+}
+
+func runDoctor(ctx context.Context, env *Env, args []string) error {
+	checks := []check{
+		{"cinch", pass, version.Short()},
+		{"go", pass, fmt.Sprintf("%s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)},
+	}
+	checks = append(checks, configChecks()...)
+	checks = append(checks,
+		binary("git", "how you review and undo the changes cinch makes"),
+		binary("rg", "makes grep faster and skips files listed in .gitignore"),
+	)
+
+	tw := tabwriter.NewWriter(env.Stdout, 0, 0, 2, ' ', 0)
+
+	failed := 0
+	for _, c := range checks {
+		if c.status == fail {
+			failed++
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.status.label(), c.name, c.detail)
+	}
+	tw.Flush()
+
+	if failed > 0 {
+		return fmt.Errorf("%d check(s) failed", failed)
+	}
+	return nil
+}
+
+func configChecks() []check {
+	out := []check{{"workspace", pass, workingDir()}}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return append(out, check{"api key", fail, err.Error()})
+	}
+
+	return append(out,
+		check{"api key", pass, "set (value hidden)"},
+		check{"model", pass, cfg.Model},
+	)
+}
+
+func workingDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	return dir
+}
+
+func binary(name, why string) check {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return check{name, warn, "not found — " + why}
+	}
+	return check{name, pass, path}
+}

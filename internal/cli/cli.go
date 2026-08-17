@@ -21,8 +21,17 @@ const (
 	ExitInterrupted = 130
 )
 
-// ErrUsage marks a wrong command line. It ends the program with code 2.
 var ErrUsage = errors.New("usage")
+
+type usageError struct{ message string }
+
+func (e *usageError) Error() string { return e.message }
+
+func (e *usageError) Is(target error) bool { return target == ErrUsage }
+
+func usagef(format string, args ...any) error {
+	return &usageError{message: fmt.Sprintf(format, args...)}
+}
 
 type Env struct {
 	Stdin  io.Reader
@@ -42,6 +51,7 @@ type Command struct {
 func commands() []*Command {
 	return []*Command{
 		chatCmd(),
+		doctorCmd(),
 		versionCmd(),
 	}
 }
@@ -80,7 +90,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			printUsage(stdout)
 			return nil
 		}
-		return fmt.Errorf("%w: %v", ErrUsage, err)
+		return usagef("%v", err)
 	}
 
 	env := &Env{Stdin: stdin, Stdout: stdout, Stderr: stderr, Debug: debug}
@@ -124,14 +134,50 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 func unknown(name string) error {
-	message := fmt.Sprintf("unknown command %q", name)
+	if match := suggest(name); match != "" {
+		return usagef("unknown command %q (did you mean %q?)", name, match)
+	}
+	return usagef("unknown command %q. Run 'cinch help' to see the commands", name)
+}
+
+func suggest(name string) string {
+	best, bestDistance := "", 3 
+
 	for _, c := range commands() {
 		if strings.HasPrefix(c.Name, name) {
-			message += fmt.Sprintf(" (did you mean %q?)", c.Name)
-			break
+			return c.Name
+		}
+		if d := editDistance(name, c.Name); d < bestDistance {
+			best, bestDistance = c.Name, d
 		}
 	}
-	return fmt.Errorf("%w: %s", ErrUsage, message)
+	return best
+}
+
+func editDistance(a, b string) int {
+	previous := make([]int, len(b)+1)
+	current := make([]int, len(b)+1)
+
+	for j := range previous {
+		previous[j] = j
+	}
+
+	for i := 1; i <= len(a); i++ {
+		current[0] = i 
+		for j := 1; j <= len(b); j++ {
+			replace := 1
+			if a[i-1] == b[j-1] {
+				replace = 0
+			}
+			current[j] = min(
+				previous[j]+1,         
+				current[j-1]+1,        
+				previous[j-1]+replace,
+			)
+		}
+		previous, current = current, previous
+	}
+	return previous[len(b)]
 }
 
 func ExitCode(err error) int {
