@@ -15,6 +15,8 @@ func TestResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	root = ts.Root()
+
 	cases := []struct {
 		name    string
 		path    string
