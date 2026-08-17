@@ -534,7 +534,7 @@ func Summary(name, arguments string) string {
 			dir = "."
 		}
 		return "list files in " + dir
-		
+
 	case "grep":
 		if args.Path != "" {
 			return fmt.Sprintf("grep %q in %s", args.Pattern, args.Path)
@@ -587,8 +587,6 @@ func matchFile(abs, rel string, re *regexp.Regexp) []string {
 		}
 	}
 
-	// A scan that stopped early would otherwise return partial matches for this
-	// file with nothing to say so — a silently incomplete search across a repo.
 	if err := scanner.Err(); err != nil {
 		reason := err.Error()
 		if errors.Is(err, bufio.ErrTooLong) {
