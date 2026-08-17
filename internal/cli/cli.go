@@ -42,10 +42,10 @@ type Env struct {
 
 // Command is one subcommand, described as data.
 type Command struct {
-	Name string
+	Name    string
 	Summary string
-	Usage string
-	Run func(ctx context.Context, env *Env, args []string) error
+	Usage   string
+	Run     func(ctx context.Context, env *Env, args []string) error
 }
 
 func commands() []*Command {
@@ -75,8 +75,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	var (
 		showVersion bool
-		debug bool
-		cwd string
+		debug       bool
+		cwd         string
 	)
 
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
@@ -141,7 +141,7 @@ func unknown(name string) error {
 }
 
 func suggest(name string) string {
-	best, bestDistance := "", 3 
+	best, bestDistance := "", 3
 
 	for _, c := range commands() {
 		if strings.HasPrefix(c.Name, name) {
@@ -163,15 +163,15 @@ func editDistance(a, b string) int {
 	}
 
 	for i := 1; i <= len(a); i++ {
-		current[0] = i 
+		current[0] = i
 		for j := 1; j <= len(b); j++ {
 			replace := 1
 			if a[i-1] == b[j-1] {
 				replace = 0
 			}
 			current[j] = min(
-				previous[j]+1,         
-				current[j-1]+1,        
+				previous[j]+1,
+				current[j-1]+1,
 				previous[j-1]+replace,
 			)
 		}

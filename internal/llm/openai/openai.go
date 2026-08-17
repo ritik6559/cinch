@@ -49,7 +49,6 @@ type Response struct {
 	Usage  Usage             `json:"usage"`
 }
 
-
 func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool) (*Response, error) {
 	payload := map[string]any{
 		"model":   c.model,

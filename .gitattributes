@@ -1,0 +1,11 @@
+# Go tools always write LF line endings. Store these files with LF on every
+# platform, including Windows, so gofmt and git never disagree.
+*.go text eol=lf
+
+# These break on Linux if they are stored with CRLF endings.
+*.sh     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+Makefile text eol=lf
+go.mod   text eol=lf
+go.sum   text eol=lf

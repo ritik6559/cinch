@@ -24,9 +24,9 @@ func doctorCmd() *Command {
 type status int
 
 const (
-	pass status = iota 
-	warn             
-	fail              
+	pass status = iota
+	warn
+	fail
 )
 
 func (s status) label() string {
