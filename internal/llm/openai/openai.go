@@ -12,20 +12,45 @@ import (
 	"github.com/ritik6559/cinch/internal/version"
 )
 
-const apiUrl = "https://api.openai.com/v1/responses"
+const defaultBaseURL = "https://api.openai.com/v1/responses"
 
 type Client struct {
-	apikey string
-	model  string
-	http   *http.Client
+	apikey  string
+	model   string
+	baseURL string
+	http    *http.Client
 }
 
-func New(apiKey, model string) *Client {
-	return &Client{
-		apikey: apiKey,
-		model:  model,
-		http:   &http.Client{Timeout: 5 * time.Minute},
+type Option func(*Client)
+
+func WithBaseURL(url string) Option {
+	return func(c *Client) {
+		if url != "" {
+			c.baseURL = url
+		}
 	}
+}
+
+func WithHTTPClient(h *http.Client) Option {
+	return func(c *Client) {
+		if h != nil {
+			c.http = h
+		}
+	}
+}
+
+func New(apiKey, model string, opts ...Option) *Client {
+	c := &Client{
+		apikey:  apiKey,
+		model:   model,
+		baseURL: defaultBaseURL,
+		http:    &http.Client{Timeout: 5 * time.Minute},
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c
 }
 
 type Tool struct {
@@ -68,7 +93,7 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiUrl, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
