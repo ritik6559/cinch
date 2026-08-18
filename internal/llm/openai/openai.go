@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +13,14 @@ import (
 	"github.com/ritik6559/cinch/internal/version"
 )
 
-const defaultBaseURL = "https://api.openai.com/v1/responses"
+const (
+	defaultBaseURL = "https://api.openai.com/v1/responses"
+	maxAttempts    = 3
+)
+
+// backoffBase is the first retry delay. It is a variable rather than a constant
+// so tests can shrink it: otherwise every retry test would take seconds.
+var backoffBase = time.Second
 
 type Client struct {
 	apikey  string
@@ -93,6 +101,49 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 		return nil, err
 	}
 
+	raw, err := c.post(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp Response
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			if err := wait(ctx, backoff(attempt, lastErr)); err != nil {
+				return nil, err
+			}
+		}
+
+		raw, err := c.do(ctx, body)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && !apiErr.Retryable() {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("gave up after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func (c *Client) do(ctx context.Context, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -112,15 +163,26 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 		return nil, err
 	}
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http: %d: %s", httpResp.StatusCode, raw)
+		return nil, decodeError(httpResp.StatusCode, raw, httpResp.Header)
 	}
+	return raw, nil
+}
 
-	var resp Response
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
+func backoff(attempt int, err error) time.Duration {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.RetryAfter > 0 {
+		return apiErr.RetryAfter
 	}
+	return time.Duration(1<<(attempt-2)) * backoffBase
+}
 
-	return &resp, nil
+func wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 func (r *Response) Texts() []string {
