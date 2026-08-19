@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ritik6559/cinch/internal/version"
@@ -16,6 +18,7 @@ import (
 const (
 	defaultBaseURL = "https://api.openai.com/v1/responses"
 	maxAttempts    = 3
+	maxEventBytes  = 8 * 1024 * 1024
 )
 
 // backoffBase is the first retry delay. It is a variable rather than a constant
@@ -115,12 +118,14 @@ func (u *Usage) Add(other Usage) {
 	u.ReasoningTokens += other.ReasoningTokens
 }
 
-func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool) (*Response, error) {
+func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool, onText func(string)) (*Response, error) {
+
 	payload := map[string]any{
 		"model":   c.model,
 		"input":   input,
 		"tools":   tools,
 		"store":   false,
+		"stream":  true,
 		"include": []string{"reasoning.encrypted_content"},
 	}
 	if system != "" {
@@ -132,7 +137,7 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 		return nil, err
 	}
 
-	raw, err := c.post(ctx, body)
+	raw, err := c.post(ctx, body, onText)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +150,17 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 	return &resp, nil
 }
 
-func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
+func (c *Client) post(ctx context.Context, body []byte, onText func(string)) ([]byte, error) {
 	var lastErr error
+	var written bool
+
+	emit := onText
+	if onText != nil {
+		emit = func(s string) {
+			written = true
+			onText(s)
+		}
+	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
@@ -155,7 +169,7 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
 			}
 		}
 
-		raw, err := c.do(ctx, body)
+		raw, err := c.do(ctx, body, emit)
 		if err == nil {
 			return raw, nil
 		}
@@ -163,6 +177,10 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if written {
+			return nil, fmt.Errorf("stream failed after output began: %w", err)
 		}
 
 		var apiErr *APIError
@@ -174,7 +192,7 @@ func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
 	return nil, fmt.Errorf("gave up after %d attempts: %w", maxAttempts, lastErr)
 }
 
-func (c *Client) do(ctx context.Context, body []byte) ([]byte, error) {
+func (c *Client) do(ctx context.Context, body []byte, onText func(string)) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -182,6 +200,7 @@ func (c *Client) do(ctx context.Context, body []byte) ([]byte, error) {
 	req.Header.Set("Authorization", "Bearer "+c.apikey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", version.UserAgent())
+	req.Header.Set("Accept", "text/event-stream")
 
 	httpResp, err := c.http.Do(req)
 	if err != nil {
@@ -189,14 +208,77 @@ func (c *Client) do(ctx context.Context, body []byte) ([]byte, error) {
 	}
 	defer httpResp.Body.Close()
 
-	raw, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, err
-	}
 	if httpResp.StatusCode != http.StatusOK {
+		raw, readErr := io.ReadAll(httpResp.Body)
+		if readErr != nil {
+			return nil, readErr
+		}
 		return nil, decodeError(httpResp.StatusCode, raw, httpResp.Header)
 	}
-	return raw, nil
+
+	return readStream(httpResp.Body, onText)
+}
+
+func readStream(body io.Reader, onText func(string)) ([]byte, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxEventBytes)
+
+	var completed []byte
+
+	for scanner.Scan() {
+		payload, ok := strings.CutPrefix(scanner.Text(), "data: ")
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+
+		var event struct {
+			Type     string          `json:"type"`
+			Delta    string          `json:"delta"`
+			Message  string          `json:"message"`
+			Response json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+
+		switch event.Type {
+		case "response.output_text.delta":
+			if onText != nil && event.Delta != "" {
+				onText(event.Delta)
+			}
+
+		case "response.completed":
+			completed = event.Response
+
+		case "error", "response.failed", "response.incomplete":
+			return nil, streamError(event.Message, event.Response)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+
+	if completed == nil {
+		return nil, errors.New("stream ended without a completed event")
+	}
+	return completed, nil
+}
+
+func streamError(message string, response json.RawMessage) error {
+	if message != "" {
+		return fmt.Errorf("stream failed: %s", message)
+	}
+
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &body); err == nil && body.Error.Message != "" {
+		return fmt.Errorf("stream failed: %s", body.Error.Message)
+	}
+	return errors.New("stream failed")
 }
 
 func backoff(attempt int, err error) time.Duration {

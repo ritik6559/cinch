@@ -50,7 +50,9 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 	a.turnUsage = openai.Usage{}
 
 	for step := range maxSteps {
-		resp, err := a.client.Call(ctx, a.system, a.input, a.tools.Definitions())
+		printer := &streamPrinter{out: a.out}
+		resp, err := a.client.Call(ctx, a.system, a.input, a.tools.Definitions(), printer.write)
+		printer.done() 
 		if err != nil {
 			return err
 		}
@@ -58,9 +60,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		a.input = append(a.input, resp.Output...)
 		a.turnUsage.Add(resp.Usage)
 		a.usage.Add(resp.Usage)
-		for _, text := range resp.Texts() {
-			fmt.Fprintf(a.out, "\ncinch: %s\n", text)
-		}
+		// The text is already on screen: printer wrote it as it arrived.
 
 		calls := resp.Calls()
 		if len(calls) == 0 {
@@ -91,4 +91,24 @@ func (a *Agent) execute(ctx context.Context, call openai.FunctionCall, summary s
 	}
 
 	return a.tools.Run(ctx, call.Name, call.Arguments)
+}
+
+type streamPrinter struct {
+	out     io.Writer
+	started bool
+}
+
+func (p *streamPrinter) write(text string) {
+	if !p.started {
+		fmt.Fprint(p.out, "\ncinch: ")
+		p.started = true
+	}
+	fmt.Fprint(p.out, text)
+}
+
+func (p *streamPrinter) done() {
+	if p.started {
+		fmt.Fprintln(p.out)
+		p.started = false
+	}
 }

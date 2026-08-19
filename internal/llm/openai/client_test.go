@@ -1,8 +1,11 @@
 package openai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,13 +34,15 @@ func TestRetriesUntilSuccess(t *testing.T) {
 			w.Write([]byte(`{"error":{"message":"slow down","type":"rate_limit_error"}}`))
 			return
 		}
-		w.Write([]byte(`{"output":[],"usage":{"input_tokens":7,"output_tokens":2}}`))
+		sse(w, `{"type":"response.completed","response":{
+			"output":[],"usage":{"input_tokens":7,"output_tokens":2}
+		}}`)
 	}))
 	defer server.Close()
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	resp, err := client.Call(context.Background(), "", nil, nil)
+	resp, err := client.Call(context.Background(), "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got %v", err)
 	}
@@ -63,7 +68,7 @@ func TestDoesNotRetryPermanentFailure(t *testing.T) {
 
 	client := New("wrong-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(context.Background(), "", nil, nil)
+	_, err := client.Call(context.Background(), "", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from a 401")
 	}
@@ -100,7 +105,7 @@ func TestNonJSONErrorBodyIsKept(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(context.Background(), "", nil, nil)
+	_, err := client.Call(context.Background(), "", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from a 502")
 	}
@@ -123,7 +128,7 @@ func TestCancelledContextStopsImmediately(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(ctx, "", nil, nil)
+	_, err := client.Call(ctx, "", nil, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -170,7 +175,7 @@ func TestRetryable(t *testing.T) {
 // inside nested objects, so they are the ones most likely to be lost.
 func TestUsageFlattensDetails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{
+		sse(w, `{"type":"response.completed","response":{
 			"output": [],
 			"usage": {
 				"input_tokens": 1240,
@@ -178,13 +183,13 @@ func TestUsageFlattensDetails(t *testing.T) {
 				"output_tokens": 310,
 				"output_tokens_details": {"reasoning_tokens": 256}
 			}
-		}`))
+		}}`)
 	}))
 	defer server.Close()
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	resp, err := client.Call(context.Background(), "", nil, nil)
+	resp, err := client.Call(context.Background(), "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,5 +207,134 @@ func TestUsageAdd(t *testing.T) {
 	want := Usage{InputTokens: 150, OutputTokens: 30, ReasoningTokens: 8}
 	if total != want {
 		t.Errorf("got %+v, want %+v", total, want)
+	}
+}
+
+// sse writes events in the wire format the API uses, flushing each one so the
+// client really does receive them one at a time.
+func sse(w http.ResponseWriter, events ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, e := range events {
+		// A data value must be one line. The payloads below are written across
+		// several lines to stay readable, so compact them first. This also
+		// fails loudly if a test contains malformed JSON.
+		var oneLine bytes.Buffer
+		if err := json.Compact(&oneLine, []byte(e)); err != nil {
+			panic("bad test event JSON: " + err.Error())
+		}
+		fmt.Fprintf(w, "data: %s\n\n", oneLine.String())
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+func TestStreamingDeltasAndFinalResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sse(w,
+			`{"type":"response.created"}`,
+			`{"type":"response.output_text.delta","delta":"Hello"}`,
+			`{"type":"response.output_text.delta","delta":" there"}`,
+			`{"type":"response.completed","response":{
+				"output":[{"type":"message","content":[{"type":"output_text","text":"Hello there"}]}],
+				"usage":{"input_tokens":42,"output_tokens":3}
+			}}`,
+		)
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	var streamed strings.Builder
+	resp, err := client.Call(context.Background(), "", nil, nil, func(s string) {
+		streamed.WriteString(s)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := streamed.String(); got != "Hello there" {
+		t.Errorf("streamed %q, want %q", got, "Hello there")
+	}
+	// The final object, not the deltas, is what the agent works from.
+	if texts := resp.Texts(); len(texts) != 1 || texts[0] != "Hello there" {
+		t.Errorf("final response text = %v", texts)
+	}
+	if resp.Usage.InputTokens != 42 {
+		t.Errorf("got %d input tokens, want 42", resp.Usage.InputTokens)
+	}
+}
+
+// A dropped connection after a 200 must not look like an empty answer.
+func TestStreamWithoutCompletedFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sse(w, `{"type":"response.output_text.delta","delta":"half a sen"}`)
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	if _, err := client.Call(context.Background(), "", nil, nil, func(string) {}); err == nil {
+		t.Fatal("expected an error when the stream ends early")
+	}
+}
+
+// Once text has reached the screen, retrying would print the answer twice.
+func TestNoRetryOnceTextHasBeenWritten(t *testing.T) {
+	fastBackoff(t)
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		sse(w, `{"type":"response.output_text.delta","delta":"partial"}`)
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	if _, err := client.Call(context.Background(), "", nil, nil, func(string) {}); err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("server saw %d requests, want 1: no retry after output began", got)
+	}
+}
+
+// With no display callback there is nothing to duplicate, so a broken stream is
+// still retried.
+func TestRetriesWhenNobodyIsWatching(t *testing.T) {
+	fastBackoff(t)
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) < 2 {
+			sse(w, `{"type":"response.output_text.delta","delta":"partial"}`)
+			return
+		}
+		sse(w, `{"type":"response.completed","response":{"output":[],"usage":{}}}`)
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	if _, err := client.Call(context.Background(), "", nil, nil, nil); err != nil {
+		t.Fatalf("expected the broken stream to be retried, got %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("server saw %d requests, want 2", got)
+	}
+}
+
+func TestStreamErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sse(w, `{"type":"error","message":"model overloaded"}`)
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	_, err := client.Call(context.Background(), "", nil, nil, func(string) {})
+	if err == nil || !strings.Contains(err.Error(), "model overloaded") {
+		t.Fatalf("got %v, want the message from the error event", err)
 	}
 }
