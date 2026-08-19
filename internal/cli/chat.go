@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/ritik6559/cinch/internal/agent"
@@ -83,5 +84,44 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 			}
 			fmt.Fprintf(env.Stderr, "error: %v\n", err)
 		}
+
+		fmt.Fprintln(env.Stdout, usageLine(a.TurnUsage(), a.Usage()))
 	}
+}
+
+func usageLine(turn, session openai.Usage) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "  %s in", comma(turn.InputTokens))
+	if turn.CachedTokens > 0 {
+		fmt.Fprintf(&b, " (%s cached)", comma(turn.CachedTokens))
+	}
+
+	fmt.Fprintf(&b, " · %s out", comma(turn.OutputTokens))
+	if turn.ReasoningTokens > 0 {
+		fmt.Fprintf(&b, " (%s thinking)", comma(turn.ReasoningTokens))
+	}
+
+	fmt.Fprintf(&b, " · session %s in", comma(session.InputTokens))
+	return b.String()
+}
+
+func comma(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+
+	var b strings.Builder
+	lead := len(s) % 3
+	if lead > 0 {
+		b.WriteString(s[:lead])
+	}
+	for i := lead; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }

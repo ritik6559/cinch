@@ -24,6 +24,9 @@ type Agent struct {
 	system   string
 	out      io.Writer
 	input    []json.RawMessage
+
+	usage     openai.Usage
+	turnUsage openai.Usage
 }
 
 func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
@@ -38,8 +41,13 @@ func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writ
 
 func (a *Agent) SetSystemPrompt(s string) { a.system = s }
 
+func (a *Agent) Usage() openai.Usage { return a.usage }
+
+func (a *Agent) TurnUsage() openai.Usage { return a.turnUsage }
+
 func (a *Agent) Run(ctx context.Context, prompt string) error {
 	a.input = append(a.input, openai.UserMessage(prompt))
+	a.turnUsage = openai.Usage{}
 
 	for step := range maxSteps {
 		resp, err := a.client.Call(ctx, a.system, a.input, a.tools.Definitions())
@@ -48,6 +56,8 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		}
 
 		a.input = append(a.input, resp.Output...)
+		a.turnUsage.Add(resp.Usage)
+		a.usage.Add(resp.Usage)
 		for _, text := range resp.Texts() {
 			fmt.Fprintf(a.out, "\ncinch: %s\n", text)
 		}

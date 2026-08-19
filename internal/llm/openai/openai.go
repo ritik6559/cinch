@@ -75,13 +75,44 @@ type FunctionCall struct {
 }
 
 type Usage struct {
-	InputToken   int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens     int
+	OutputTokens    int
+	CachedTokens    int
+	ReasoningTokens int
 }
 
 type Response struct {
 	Output []json.RawMessage `json:"output"`
 	Usage  Usage             `json:"usage"`
+}
+
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		InputTokens        int `json:"input_tokens"`
+		OutputTokens       int `json:"output_tokens"`
+		InputTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
+		OutputTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	u.InputTokens = wire.InputTokens
+	u.OutputTokens = wire.OutputTokens
+	u.CachedTokens = wire.InputTokensDetails.CachedTokens
+	u.ReasoningTokens = wire.OutputTokensDetails.ReasoningTokens
+	return nil
+}
+
+func (u *Usage) Add(other Usage) {
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.CachedTokens += other.CachedTokens
+	u.ReasoningTokens += other.ReasoningTokens
 }
 
 func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool) (*Response, error) {

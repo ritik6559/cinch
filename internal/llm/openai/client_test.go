@@ -44,8 +44,8 @@ func TestRetriesUntilSuccess(t *testing.T) {
 	if got := attempts.Load(); got != 3 {
 		t.Errorf("server saw %d requests, want 3", got)
 	}
-	if resp.Usage.InputToken != 7 {
-		t.Errorf("got %d input tokens, want 7", resp.Usage.InputToken)
+	if resp.Usage.InputTokens != 7 {
+		t.Errorf("got %d input tokens, want 7", resp.Usage.InputTokens)
 	}
 }
 
@@ -163,5 +163,44 @@ func TestRetryable(t *testing.T) {
 		if got := (&APIError{StatusCode: status}).Retryable(); got != want {
 			t.Errorf("status %d: Retryable() = %v, want %v", status, got, want)
 		}
+	}
+}
+
+// Wrong JSON tags fail silently: they simply give zero. These two values live
+// inside nested objects, so they are the ones most likely to be lost.
+func TestUsageFlattensDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"output": [],
+			"usage": {
+				"input_tokens": 1240,
+				"input_tokens_details":  {"cached_tokens": 980},
+				"output_tokens": 310,
+				"output_tokens_details": {"reasoning_tokens": 256}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := New("test-key", "test-model", WithBaseURL(server.URL))
+
+	resp, err := client.Call(context.Background(), "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := Usage{InputTokens: 1240, OutputTokens: 310, CachedTokens: 980, ReasoningTokens: 256}
+	if resp.Usage != want {
+		t.Errorf("got %+v, want %+v", resp.Usage, want)
+	}
+}
+
+func TestUsageAdd(t *testing.T) {
+	total := Usage{InputTokens: 100, OutputTokens: 20}
+	total.Add(Usage{InputTokens: 50, OutputTokens: 10, ReasoningTokens: 8})
+
+	want := Usage{InputTokens: 150, OutputTokens: 30, ReasoningTokens: 8}
+	if total != want {
+		t.Errorf("got %+v, want %+v", total, want)
 	}
 }
