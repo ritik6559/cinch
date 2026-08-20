@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ritik6559/cinch/internal/llm"
 	"github.com/ritik6559/cinch/internal/version"
 )
 
@@ -64,72 +65,15 @@ func New(apiKey, model string, opts ...Option) *Client {
 	return c
 }
 
-type Tool struct {
-	Type        string         `json:"type"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
+// Client implements llm.Provider against the OpenAI Responses API.
+var _ llm.Provider = (*Client)(nil)
 
-type FunctionCall struct {
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
+func (c *Client) Name() string { return "openai" }
 
-type Usage struct {
-	InputTokens     int
-	OutputTokens    int
-	CachedTokens    int
-	ReasoningTokens int
-}
-
-type Response struct {
-	Output []json.RawMessage `json:"output"`
-	Usage  Usage             `json:"usage"`
-}
-
-func (u *Usage) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		InputTokens        int `json:"input_tokens"`
-		OutputTokens       int `json:"output_tokens"`
-		InputTokensDetails struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"input_tokens_details"`
-		OutputTokensDetails struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"output_tokens_details"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-
-	u.InputTokens = wire.InputTokens
-	u.OutputTokens = wire.OutputTokens
-	u.CachedTokens = wire.InputTokensDetails.CachedTokens
-	u.ReasoningTokens = wire.OutputTokensDetails.ReasoningTokens
-	return nil
-}
-
-func (u *Usage) Add(other Usage) {
-	u.InputTokens += other.InputTokens
-	u.OutputTokens += other.OutputTokens
-	u.CachedTokens += other.CachedTokens
-	u.ReasoningTokens += other.ReasoningTokens
-}
-
-func (c *Client) Call(ctx context.Context, system string, input []json.RawMessage, tools []Tool, onText func(string)) (*Response, error) {
-
-	payload := map[string]any{
-		"model":   c.model,
-		"input":   input,
-		"tools":   tools,
-		"store":   false,
-		"stream":  true,
-		"include": []string{"reasoning.encrypted_content"},
-	}
-	if system != "" {
-		payload["instructions"] = system
+func (c *Client) Complete(ctx context.Context, req llm.Request, onText func(string)) (*llm.Response, error) {
+	payload, err := c.lowerRequest(req)
+	if err != nil {
+		return nil, err
 	}
 
 	body, err := json.Marshal(payload)
@@ -141,13 +85,7 @@ func (c *Client) Call(ctx context.Context, system string, input []json.RawMessag
 	if err != nil {
 		return nil, err
 	}
-
-	var resp Response
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	return &resp, nil
+	return raiseResponse(raw)
 }
 
 func (c *Client) post(ctx context.Context, body []byte, onText func(string)) ([]byte, error) {
@@ -296,77 +234,4 @@ func wait(ctx context.Context, d time.Duration) error {
 	case <-time.After(d):
 		return nil
 	}
-}
-
-func (r *Response) Texts() []string {
-	var out []string
-	for _, item := range r.Output {
-		if itemType(item) != "message" {
-			continue
-		}
-		var m struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if err := json.Unmarshal(item, &m); err != nil {
-			continue
-		}
-		for _, c := range m.Content {
-			if c.Type == "output_text" {
-				out = append(out, c.Text)
-			}
-		}
-	}
-
-	return out
-}
-
-func (r *Response) Calls() []FunctionCall {
-	var out []FunctionCall
-	for _, item := range r.Output {
-		if itemType(item) != "function_call" {
-			continue
-		}
-		var fc FunctionCall
-		if err := json.Unmarshal(item, &fc); err != nil {
-			continue
-		}
-		out = append(out, fc)
-	}
-	return out
-}
-
-func UserMessage(text string) json.RawMessage {
-	return mustJSON(map[string]any{
-		"role":    "user",
-		"content": text,
-	})
-}
-
-func ToolResult(callID, output string) json.RawMessage {
-	return mustJSON(map[string]any{
-		"type":    "function_call_output",
-		"call_id": callID,
-		"output":  output,
-	})
-}
-
-func itemType(raw json.RawMessage) string {
-	var head struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return ""
-	}
-	return head.Type
-}
-
-func mustJSON(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
 }

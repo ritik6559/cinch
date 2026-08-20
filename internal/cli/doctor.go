@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/ritik6559/cinch/internal/config"
+	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/version"
 )
 
@@ -79,13 +80,18 @@ func configChecks() []check {
 
 	cfg, err := config.Load()
 	if err != nil {
-		return append(out, check{"api key", fail, err.Error()})
+		return append(out, check{"config", fail, err.Error()})
 	}
 
-	return append(out,
-		check{"api key", pass, "set (value hidden)"},
-		check{"model", pass, cfg.Model},
-	)
+	out = append(out, providerCheck(cfg))
+
+	if cfg.APIKey == "" {
+		out = append(out, check{"api key", fail, config.MissingKeyMessage(cfg.Provider)})
+	} else {
+		out = append(out, check{"api key", pass, "set (value hidden)"})
+	}
+
+	return append(out, check{"model", pass, cfg.Model})
 }
 
 func workingDir() string {
@@ -102,4 +108,11 @@ func binary(name, why string) check {
 		return check{name, warn, "not found — " + why}
 	}
 	return check{name, pass, path}
+}
+
+func providerCheck(cfg config.Config) check {
+	if _, err := provider.New(cfg); err != nil {
+		return check{"provider", fail, err.Error()}
+	}
+	return check{"provider", pass, cfg.Provider}
 }

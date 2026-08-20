@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ritik6559/cinch/internal/llm"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,7 +43,7 @@ func TestRetriesUntilSuccess(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	resp, err := client.Call(context.Background(), "", nil, nil, nil)
+	resp, err := client.Complete(context.Background(), llm.Request{}, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got %v", err)
 	}
@@ -68,7 +69,7 @@ func TestDoesNotRetryPermanentFailure(t *testing.T) {
 
 	client := New("wrong-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(context.Background(), "", nil, nil, nil)
+	_, err := client.Complete(context.Background(), llm.Request{}, nil)
 	if err == nil {
 		t.Fatal("expected an error from a 401")
 	}
@@ -105,7 +106,7 @@ func TestNonJSONErrorBodyIsKept(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(context.Background(), "", nil, nil, nil)
+	_, err := client.Complete(context.Background(), llm.Request{}, nil)
 	if err == nil {
 		t.Fatal("expected an error from a 502")
 	}
@@ -128,7 +129,7 @@ func TestCancelledContextStopsImmediately(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(ctx, "", nil, nil, nil)
+	_, err := client.Complete(ctx, llm.Request{}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -189,22 +190,22 @@ func TestUsageFlattensDetails(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	resp, err := client.Call(context.Background(), "", nil, nil, nil)
+	resp, err := client.Complete(context.Background(), llm.Request{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := Usage{InputTokens: 1240, OutputTokens: 310, CachedTokens: 980, ReasoningTokens: 256}
+	want := llm.Usage{InputTokens: 1240, OutputTokens: 310, CachedTokens: 980, ReasoningTokens: 256}
 	if resp.Usage != want {
 		t.Errorf("got %+v, want %+v", resp.Usage, want)
 	}
 }
 
 func TestUsageAdd(t *testing.T) {
-	total := Usage{InputTokens: 100, OutputTokens: 20}
-	total.Add(Usage{InputTokens: 50, OutputTokens: 10, ReasoningTokens: 8})
+	total := llm.Usage{InputTokens: 100, OutputTokens: 20}
+	total.Add(llm.Usage{InputTokens: 50, OutputTokens: 10, ReasoningTokens: 8})
 
-	want := Usage{InputTokens: 150, OutputTokens: 30, ReasoningTokens: 8}
+	want := llm.Usage{InputTokens: 150, OutputTokens: 30, ReasoningTokens: 8}
 	if total != want {
 		t.Errorf("got %+v, want %+v", total, want)
 	}
@@ -246,7 +247,7 @@ func TestStreamingDeltasAndFinalResponse(t *testing.T) {
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
 	var streamed strings.Builder
-	resp, err := client.Call(context.Background(), "", nil, nil, func(s string) {
+	resp, err := client.Complete(context.Background(), llm.Request{}, func(s string) {
 		streamed.WriteString(s)
 	})
 	if err != nil {
@@ -257,8 +258,8 @@ func TestStreamingDeltasAndFinalResponse(t *testing.T) {
 		t.Errorf("streamed %q, want %q", got, "Hello there")
 	}
 	// The final object, not the deltas, is what the agent works from.
-	if texts := resp.Texts(); len(texts) != 1 || texts[0] != "Hello there" {
-		t.Errorf("final response text = %v", texts)
+	if got := resp.Message.TextContent(); got != "Hello there" {
+		t.Errorf("final response text = %q, want %q", got, "Hello there")
 	}
 	if resp.Usage.InputTokens != 42 {
 		t.Errorf("got %d input tokens, want 42", resp.Usage.InputTokens)
@@ -274,7 +275,7 @@ func TestStreamWithoutCompletedFails(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	if _, err := client.Call(context.Background(), "", nil, nil, func(string) {}); err == nil {
+	if _, err := client.Complete(context.Background(), llm.Request{}, func(string) {}); err == nil {
 		t.Fatal("expected an error when the stream ends early")
 	}
 }
@@ -292,7 +293,7 @@ func TestNoRetryOnceTextHasBeenWritten(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	if _, err := client.Call(context.Background(), "", nil, nil, func(string) {}); err == nil {
+	if _, err := client.Complete(context.Background(), llm.Request{}, func(string) {}); err == nil {
 		t.Fatal("expected an error")
 	}
 	if got := attempts.Load(); got != 1 {
@@ -317,7 +318,7 @@ func TestRetriesWhenNobodyIsWatching(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	if _, err := client.Call(context.Background(), "", nil, nil, nil); err != nil {
+	if _, err := client.Complete(context.Background(), llm.Request{}, nil); err != nil {
 		t.Fatalf("expected the broken stream to be retried, got %v", err)
 	}
 	if got := attempts.Load(); got != 2 {
@@ -333,7 +334,7 @@ func TestStreamErrorEvent(t *testing.T) {
 
 	client := New("test-key", "test-model", WithBaseURL(server.URL))
 
-	_, err := client.Call(context.Background(), "", nil, nil, func(string) {})
+	_, err := client.Complete(context.Background(), llm.Request{}, func(string) {})
 	if err == nil || !strings.Contains(err.Error(), "model overloaded") {
 		t.Fatalf("got %v, want the message from the error event", err)
 	}

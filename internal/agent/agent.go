@@ -2,12 +2,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
-	"github.com/ritik6559/cinch/internal/llm/openai"
+	"github.com/ritik6559/cinch/internal/llm"
 	"github.com/ritik6559/cinch/internal/tools"
 )
 
@@ -18,20 +17,20 @@ var ErrMaxSteps = errors.New("reached step limit")
 type Approver func(tool, summary string) bool
 
 type Agent struct {
-	client   *openai.Client
+	provider llm.Provider
 	tools    *tools.Tools
 	approver Approver
 	system   string
 	out      io.Writer
-	input    []json.RawMessage
+	messages []llm.Message
 
-	usage     openai.Usage
-	turnUsage openai.Usage
+	usage     llm.Usage
+	turnUsage llm.Usage
 }
 
-func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
+func New(provider llm.Provider, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
 	return &Agent{
-		client:   client,
+		provider: provider,
 		tools:    tls,
 		approver: approver,
 		system:   DefaultSystemPrompt,
@@ -41,28 +40,34 @@ func New(client *openai.Client, tls *tools.Tools, approver Approver, out io.Writ
 
 func (a *Agent) SetSystemPrompt(s string) { a.system = s }
 
-func (a *Agent) Usage() openai.Usage { return a.usage }
+func (a *Agent) Usage() llm.Usage { return a.usage }
 
-func (a *Agent) TurnUsage() openai.Usage { return a.turnUsage }
+func (a *Agent) TurnUsage() llm.Usage { return a.turnUsage }
+
+func (a *Agent) Messages() []llm.Message { return a.messages }
 
 func (a *Agent) Run(ctx context.Context, prompt string) error {
-	a.input = append(a.input, openai.UserMessage(prompt))
-	a.turnUsage = openai.Usage{}
+	a.messages = append(a.messages, llm.UserText(prompt))
+	a.turnUsage = llm.Usage{}
 
 	for step := range maxSteps {
 		printer := &streamPrinter{out: a.out}
-		resp, err := a.client.Call(ctx, a.system, a.input, a.tools.Definitions(), printer.write)
-		printer.done() 
+		resp, err := a.provider.Complete(ctx, llm.Request{
+			System:   a.system,
+			Messages: a.messages,
+			Tools:    a.tools.Definitions(),
+		}, printer.write)
+		printer.done()
 		if err != nil {
 			return err
 		}
 
-		a.input = append(a.input, resp.Output...)
+		a.messages = append(a.messages, resp.Message)
 		a.turnUsage.Add(resp.Usage)
 		a.usage.Add(resp.Usage)
 		// The text is already on screen: printer wrote it as it arrived.
 
-		calls := resp.Calls()
+		calls := resp.Message.ToolUses()
 		if len(calls) == 0 {
 			return nil
 		}
@@ -72,25 +77,34 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 			return fmt.Errorf("%w of %d", ErrMaxSteps, maxSteps)
 		}
 
+		results := make([]llm.Block, 0, len(calls))
 		for _, call := range calls {
-			summary := tools.Summary(call.Name, call.Arguments)
+			summary := tools.Summary(call.Name, string(call.Input))
 			fmt.Fprintf(a.out, " -> %s\n", summary)
-			a.input = append(a.input, openai.ToolResult(call.CallID, a.execute(ctx, call, summary)))
+			results = append(results, a.execute(ctx, call, summary))
 		}
+		a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Blocks: results})
 	}
 
 	return fmt.Errorf("%w of %d", ErrMaxSteps, maxSteps)
 }
 
-func (a *Agent) execute(ctx context.Context, call openai.FunctionCall, summary string) string {
+func (a *Agent) execute(ctx context.Context, call llm.ToolUse, summary string) llm.ToolResult {
 	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
 		if !a.approver(call.Name, summary) {
-			return "denied: the user rejected this tool call. " +
-				"Do not retry it — explain what you were going to do and ask how to proceed."
+			return llm.ToolResult{
+				ToolUseID: call.ID,
+				Content: "denied: the user rejected this tool call. " +
+					"Do not retry it — explain what you were going to do and ask how to proceed.",
+				IsError: true,
+			}
 		}
 	}
 
-	return a.tools.Run(ctx, call.Name, call.Arguments)
+	return llm.ToolResult{
+		ToolUseID: call.ID,
+		Content:   a.tools.Run(ctx, call.Name, string(call.Input)),
+	}
 }
 
 type streamPrinter struct {

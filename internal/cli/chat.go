@@ -11,7 +11,8 @@ import (
 
 	"github.com/ritik6559/cinch/internal/agent"
 	"github.com/ritik6559/cinch/internal/config"
-	"github.com/ritik6559/cinch/internal/llm/openai"
+	"github.com/ritik6559/cinch/internal/llm"
+	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/tools"
 )
 
@@ -62,7 +63,17 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 		}
 	}
 
-	a := agent.New(openai.New(cfg.APIKey, cfg.Model), ts, approve, env.Stdout)
+	// The provider name is checked first: an unknown one would otherwise be
+	// reported as a missing key, sending the user after the wrong problem.
+	p, err := provider.New(cfg)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	a := agent.New(p, ts, approve, env.Stdout)
 
 	fmt.Fprintln(env.Stdout, "cinch — ask about the files in this directory. ctrl-c to quit.")
 
@@ -89,7 +100,7 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 	}
 }
 
-func usageLine(turn, session openai.Usage) string {
+func usageLine(turn, session llm.Usage) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "  %s in", comma(turn.InputTokens))

@@ -1,5 +1,3 @@
-// Package tools is the entire interface between the model and your machine.
-// It can ask for what is defined here and nothing else.
 package tools
 
 import (
@@ -18,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ritik6559/cinch/internal/llm/openai"
+	"github.com/ritik6559/cinch/internal/llm"
 )
 
 type Tools struct {
@@ -65,14 +63,13 @@ func (t *Tools) Root() string {
 	return t.root
 }
 
-func (t *Tools) Definitions() []openai.Tool {
-	return []openai.Tool{
+func (t *Tools) Definitions() []llm.ToolDef {
+	return []llm.ToolDef{
 		{
-			Type: "function",
 			Name: "read_file",
 			Description: "Read a text file. Output is line-numbered and capped; if it is truncated the result says so and gives the offset to continue from. " +
 				"Line numbers are display only — never include them in edit_file arguments.",
-			Parameters: map[string]any{
+			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path": map[string]any{
@@ -93,10 +90,9 @@ func (t *Tools) Definitions() []openai.Tool {
 			},
 		},
 		{
-			Type:        "function",
 			Name:        "write_file",
 			Description: "Write content to a file at a relative path. Creates the file (and missing parent directories) or overwrites it.",
-			Parameters: map[string]any{
+			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path": map[string]any{
@@ -113,10 +109,9 @@ func (t *Tools) Definitions() []openai.Tool {
 			},
 		},
 		{
-			Type:        "function",
 			Name:        "edit_file",
 			Description: "Replace an exact string in a file. old_string must match the file exactly, including indentation, and must be unique unless replace_all is true.",
-			Parameters: map[string]any{
+			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path": map[string]any{
@@ -141,10 +136,9 @@ func (t *Tools) Definitions() []openai.Tool {
 			},
 		},
 		{
-			Type:        "function",
 			Name:        "list_files",
 			Description: "List files and directories. Directories end with a slash.",
-			Parameters: map[string]any{
+			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"dir": map[string]any{
@@ -157,11 +151,10 @@ func (t *Tools) Definitions() []openai.Tool {
 			},
 		},
 		{
-			Type: "function",
 			Name: "grep",
 			Description: "Search file contents with a regular expression. Returns path:line:text for each match. " +
 				"Use this to locate code instead of reading files speculatively.",
-			Parameters: map[string]any{
+			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"pattern": map[string]any{
