@@ -178,6 +178,27 @@ func (t *Tools) Definitions() []llm.ToolDef {
 				"additionalProperties": false,
 			},
 		},
+		{
+			Name: "bash",
+			Description: "Run a shell command in the workspace root and return its combined output and exit status. " +
+				"Use it to build, run tests, and inspect git. Commands are POSIX shell, never PowerShell, on every platform. " +
+				"Prefer read_file, edit_file and grep for working with files: they are safer and cheaper than shelling out.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{
+						"type":        "string",
+						"description": "The shell command, for example: go test ./...",
+					},
+					"timeout": map[string]any{
+						"type":        "integer",
+						"description": "Seconds to allow. Defaults to 120, maximum 600.",
+					},
+				},
+				"required":             []string{"command"},
+				"additionalProperties": false,
+			},
+		},
 	}
 }
 
@@ -194,6 +215,8 @@ func (t *Tools) Run(ctx context.Context, name, arguments string) string {
 		Pattern         string `json:"pattern"`
 		Glob            string `json:"glob"`
 		CaseInsensitive bool   `json:"case_insensitive"`
+		Command         string `json:"command"`
+		Timeout         int    `json:"timeout"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "error: bad arguments: " + err.Error()
@@ -244,6 +267,8 @@ func (t *Tools) Run(ctx context.Context, name, arguments string) string {
 		return strings.Join(names, "\n")
 	case "grep":
 		return t.grep(ctx, args.Pattern, args.Path, args.Glob, args.CaseInsensitive)
+	case "bash":
+		return t.bash(ctx, args.Command, args.Timeout)
 	}
 	return "error: unknown tool " + name
 }
@@ -485,6 +510,7 @@ func (t *Tools) editFile(path, oldStr, newStr string, replaceAll bool) string {
 var mutating = map[string]bool{
 	"write_file": true,
 	"edit_file":  true,
+	"bash":       true,
 }
 
 func (t *Tools) NeedsApproval(name string) bool {
@@ -504,6 +530,8 @@ func Summary(name, arguments string) string {
 		Pattern         string `json:"pattern"`
 		Glob            string `json:"glob"`
 		CaseInsensitive bool   `json:"case_insensitive"`
+		Command         string `json:"command"`
+		Timeout         int    `json:"timeout"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return name
@@ -533,8 +561,23 @@ func Summary(name, arguments string) string {
 			return fmt.Sprintf("grep %q in %s", args.Pattern, args.Path)
 		}
 		return fmt.Sprintf("grep %q", args.Pattern)
+	case "bash":
+		return "run: " + firstLine(args.Command, 100)
 	}
 	return "error: unknown tool " + name
+}
+
+func firstLine(s string, max int) string {
+	s = strings.TrimSpace(s)
+
+	line, rest, found := strings.Cut(s, "\n")
+	if r := []rune(line); len(r) > max {
+		line = string(r[:max]) + "…"
+	}
+	if found && strings.TrimSpace(rest) != "" {
+		line += " (+more lines)"
+	}
+	return line
 }
 
 func byteCount(n int) string {

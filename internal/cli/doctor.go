@@ -54,6 +54,7 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 	}
 	checks = append(checks, configChecks()...)
 	checks = append(checks,
+		binary("bash", "required by the bash tool"),
 		binary("git", "how you review and undo the changes cinch makes"),
 		binary("rg", "makes grep faster and skips files listed in .gitignore"),
 	)
