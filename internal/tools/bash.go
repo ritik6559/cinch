@@ -41,6 +41,15 @@ func (t *Tools) bash(ctx context.Context, command string, timeoutSeconds int) st
 	cmd.Env = safeEnv()
 	cmd.Stdin = nil
 
+	// The timeout signals the shell, but a grandchild — the `sleep` inside
+	// `bash -c "sleep 600"` — keeps the output pipes open, and CombinedOutput
+	// waits on those pipes, not on the shell. Without WaitDelay a one second
+	// timeout on `sleep 600` blocks for ten minutes.
+	//
+	// WaitDelay bounds that: once the context is done, the pipes are closed by
+	// force after this long and the call returns.
+	cmd.WaitDelay = 2 * time.Second
+
 	out, runErr := cmd.CombinedOutput()
 	text := truncateOutput(string(out))
 
