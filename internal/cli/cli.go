@@ -13,7 +13,6 @@ import (
 	"github.com/ritik6559/cinch/internal/version"
 )
 
-// Exit codes given to the shell when the program ends.
 const (
 	ExitOK          = 0
 	ExitError       = 1
@@ -34,13 +33,14 @@ func usagef(format string, args ...any) error {
 }
 
 type Env struct {
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
-	Debug  bool
+	Stdin    io.Reader
+	Stdout   io.Writer
+	Stderr   io.Writer
+	Debug    bool
+	Continue bool
+	Resume   string
 }
 
-// Command is one subcommand, described as data.
 type Command struct {
 	Name    string
 	Summary string
@@ -52,6 +52,7 @@ func commands() []*Command {
 	return []*Command{
 		chatCmd(),
 		doctorCmd(),
+		sessionsCmd(),
 		versionCmd(),
 	}
 }
@@ -65,10 +66,6 @@ func lookup(name string) *Command {
 	return nil
 }
 
-// Run reads the command line and calls the right command.
-//
-// Global flags must come before the command name. This is a limit of the
-// standard flag package: it stops reading flags at the first plain argument.
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("cinch", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -77,15 +74,19 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		showVersion bool
 		debug       bool
 		cwd         string
+		resume      string
+		cont        bool
 	)
 
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&showVersion, "v", false, "print version and exit")
 	fs.BoolVar(&debug, "debug", false, "print extra information")
 	fs.StringVar(&cwd, "cwd", "", "run as if cinch started in this directory")
+	fs.StringVar(&resume, "resume", "", "resume a saved session by id")
+	fs.BoolVar(&cont, "continue", false, "resume the most recent session")
+	fs.BoolVar(&cont, "c", false, "resume the most recent session")
 
 	if err := fs.Parse(args); err != nil {
-		// -h and --help arrive here as flag.ErrHelp. That is not an error.
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(stdout)
 			return nil
@@ -93,7 +94,14 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return usagef("%v", err)
 	}
 
-	env := &Env{Stdin: stdin, Stdout: stdout, Stderr: stderr, Debug: debug}
+	env := &Env{
+		Stdin:    stdin,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Debug:    debug,
+		Continue: cont,
+		Resume:   resume,
+	}
 
 	if cwd != "" {
 		if err := os.Chdir(cwd); err != nil {
@@ -108,7 +116,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return runChat(ctx, env, nil) // plain `cinch` opens a chat session
+		return runChat(ctx, env, nil)
 	}
 
 	name, commandArgs := rest[0], rest[1:]
@@ -206,10 +214,12 @@ func printUsage(w io.Writer) {
 
 	fmt.Fprint(w, `
 Flags:
-  -v, --version   print version and exit
-      --debug     print extra information
-      --cwd dir   run as if cinch started in this directory
-  -h, --help      show this help
+  -c, --continue   resume the most recent session
+      --resume id  resume a saved session by id
+  -v, --version    print version and exit
+      --debug      print extra information
+      --cwd dir    run as if cinch started in this directory
+  -h, --help       show this help
 
 Flags must come before the command name.
 

@@ -234,3 +234,34 @@ func TestSystemPromptAndToolsSentEveryTime(t *testing.T) {
 		}
 	}
 }
+
+// A turn that stops before its tools run leaves a tool call with no result.
+// The next request would carry that unanswered call and be rejected outright,
+// so one Ctrl-C would break the rest of the session.
+func TestAbandonedToolCallsAreAnswered(t *testing.T) {
+	provider := &fakeProvider{responses: []llm.Response{
+		toolCall("call_1", "list_files", `{}`),
+	}}
+	a, _ := newTestAgent(t, provider, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.Run(ctx, "look around")
+
+	provider.responses = append(provider.responses, assistantText("ok"))
+	if err := a.Run(context.Background(), "never mind, what is 2+2"); err != nil {
+		t.Fatalf("the next turn failed: %v", err)
+	}
+
+	var answered bool
+	for _, m := range provider.requests[len(provider.requests)-1].Messages {
+		for _, b := range m.Blocks {
+			if r, ok := b.(llm.ToolResult); ok && r.ToolUseID == "call_1" {
+				answered = true
+			}
+		}
+	}
+	if !answered {
+		t.Fatal("call_1 was never answered: the provider would reject this request")
+	}
+}

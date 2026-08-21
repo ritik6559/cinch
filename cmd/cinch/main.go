@@ -12,8 +12,7 @@ import (
 )
 
 func main() {
-	// NotifyContext cancels ctx when the user presses Ctrl-C.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 
 	err := cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)

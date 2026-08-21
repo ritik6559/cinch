@@ -46,7 +46,13 @@ func (a *Agent) TurnUsage() llm.Usage { return a.turnUsage }
 
 func (a *Agent) Messages() []llm.Message { return a.messages }
 
+func (a *Agent) Restore(messages []llm.Message, usage llm.Usage) {
+	a.messages = messages
+	a.usage = usage
+}
+
 func (a *Agent) Run(ctx context.Context, prompt string) error {
+	a.answerAbandonedCalls()
 	a.messages = append(a.messages, llm.UserText(prompt))
 	a.turnUsage = llm.Usage{}
 
@@ -65,7 +71,6 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		a.messages = append(a.messages, resp.Message)
 		a.turnUsage.Add(resp.Usage)
 		a.usage.Add(resp.Usage)
-		// The text is already on screen: printer wrote it as it arrived.
 
 		calls := resp.Message.ToolUses()
 		if len(calls) == 0 {
@@ -87,6 +92,27 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 	}
 
 	return fmt.Errorf("%w of %d", ErrMaxSteps, maxSteps)
+}
+
+func (a *Agent) answerAbandonedCalls() {
+	if len(a.messages) == 0 {
+		return
+	}
+
+	calls := a.messages[len(a.messages)-1].ToolUses()
+	if len(calls) == 0 {
+		return
+	}
+
+	results := make([]llm.Block, 0, len(calls))
+	for _, call := range calls {
+		results = append(results, llm.ToolResult{
+			ToolUseID: call.ID,
+			Content:   "not run: the turn was interrupted",
+			IsError:   true,
+		})
+	}
+	a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Blocks: results})
 }
 
 func (a *Agent) execute(ctx context.Context, call llm.ToolUse, summary string) llm.ToolResult {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/provider"
+	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/version"
 )
 
@@ -53,6 +54,7 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 		{"go", pass, fmt.Sprintf("%s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)},
 	}
 	checks = append(checks, configChecks()...)
+	checks = append(checks, sessionCheck())
 	checks = append(checks,
 		binary("bash", "required by the bash tool"),
 		binary("git", "how you review and undo the changes cinch makes"),
@@ -93,6 +95,19 @@ func configChecks() []check {
 	}
 
 	return append(out, check{"model", pass, cfg.Model})
+}
+
+func sessionCheck() check {
+	dir, err := session.Dir()
+	if err != nil {
+		return check{"sessions", warn, err.Error()}
+	}
+
+	all, err := session.List()
+	if err != nil {
+		return check{"sessions", warn, err.Error()}
+	}
+	return check{"sessions", pass, fmt.Sprintf("%d saved in %s", len(all), dir)}
 }
 
 func workingDir() string {

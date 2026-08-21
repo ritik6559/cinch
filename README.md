@@ -7,8 +7,8 @@ cinch is a single Go binary with almost no dependencies. It talks to the OpenAI
 Responses API in stateless mode, which means OpenAI stores nothing: cinch keeps
 the whole conversation itself.
 
-> Early work in progress. The agent loop, the file tools and the approval system
-> work. Sessions, streaming and a full terminal interface do not exist yet.
+> Early work in progress. The agent loop, the tools, approval, streaming and
+> sessions work. There is no full terminal interface yet, and no sandbox.
 
 ## Requirements
 
@@ -79,6 +79,7 @@ cinch: Added a comment at internal/agent/agent.go:14.
 | Command | Meaning |
 |---|---|
 | `cinch` | Start a chat session (same as `cinch chat`) |
+| `cinch sessions` | List saved sessions |
 | `cinch doctor` | Check that the local setup is complete |
 | `cinch version` | Print version information |
 | `cinch help` | Show all commands |
@@ -89,10 +90,29 @@ Flags must come before the command name.
 
 | Flag | Meaning |
 |---|---|
+| `-c`, `--continue` | Resume the most recent session |
+| `--resume id` | Resume a saved session by id |
 | `-v`, `--version` | Print version and exit |
 | `--debug` | Print extra information |
 | `--cwd dir` | Run as if cinch started in `dir` |
 | `-h`, `--help` | Show help |
+
+### Sessions
+
+Conversations are saved to `~/.cinch/sessions` after every turn, so a crash or a
+closed terminal does not lose your work.
+
+```bash
+cinch --continue      # pick up the most recent conversation
+cinch --resume <id>   # pick up a specific one
+cinch sessions        # list what is saved
+```
+
+Ctrl-C during a turn cancels that turn and returns you to the prompt. Ctrl-C at
+the prompt quits. Either way the conversation is already saved.
+
+Session files hold everything cinch read, including file contents. They are
+written owner-only, but keep that in mind when working on a private repository.
 
 ## Tools
 
