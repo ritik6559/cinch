@@ -32,7 +32,7 @@ type messageJSON struct {
 	Blocks []blockJSON `json:"blocks"`
 }
 
-func (m Message) MarshalJSO() ([]byte, error) {
+func (m Message) MarshalJSON() ([]byte, error) {
 	out := messageJSON{
 		Role:   m.Role,
 		Blocks: make([]blockJSON, 0, len(m.Blocks)),
@@ -45,12 +45,14 @@ func (m Message) MarshalJSO() ([]byte, error) {
 				Type: b.BlockType(),
 				Text: b.Text,
 			})
+
 		case Thinking:
 			out.Blocks = append(out.Blocks, blockJSON{
 				Type:   b.BlockType(),
 				ID:     b.ID,
 				Opaque: b.Opaque,
 			})
+
 		case ToolUse:
 			out.Blocks = append(out.Blocks, blockJSON{
 				Type:  b.BlockType(),
@@ -66,10 +68,12 @@ func (m Message) MarshalJSO() ([]byte, error) {
 				Content:   b.Content,
 				IsError:   b.IsError,
 			})
+
 		default:
 			return nil, fmt.Errorf("llm: cannot save block type %q", block.BlockType())
 		}
 	}
+
 	return json.Marshal(out)
 }
 
