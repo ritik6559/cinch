@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/ritik6559/cinch/internal/agent"
+	"github.com/ritik6559/cinch/internal/compact"
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/llm"
 	"github.com/ritik6559/cinch/internal/provider"
@@ -100,6 +101,11 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 			continue
 		}
 
+		if line == "/compact" {
+			runCompaction(env, a, sess)
+			continue
+		}
+
 		turnCtx, endTurn := interrupt.beginTurn(ctx)
 		runErr := a.Run(turnCtx, line)
 		endTurn()
@@ -122,7 +128,33 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 		}
 
 		fmt.Fprintln(env.Stdout, usageLine(a.TurnUsage(), a.Usage()))
+
+		// Fires one turn late: nothing counts tokens locally, so the trigger is
+		// the size of the request we just sent.
+		if cfg.CompactAt > 0 && a.TurnUsage().InputTokens > cfg.CompactAt {
+			runCompaction(env, a, sess)
+		}
 	}
+}
+
+func runCompaction(env *Env, a *agent.Agent, sess *session.Session) {
+	messages, result := compact.ToolResults(a.Messages(), compact.DefaultOptions())
+	if result.Cleared == 0 {
+		fmt.Fprintln(env.Stdout, "  nothing to compact")
+		return
+	}
+
+	a.Restore(messages, a.Usage())
+
+	// Persist the smaller form, or resuming would restore everything we just
+	// cleared.
+	sess.Messages = messages
+	if err := sess.Save(); err != nil {
+		fmt.Fprintf(env.Stderr, "warning: could not save session: %v\n", err)
+	}
+
+	fmt.Fprintf(env.Stdout, "  compacted %d tool results, freed about %s tokens\n",
+		result.Cleared, comma(result.EstimatedTokens()))
 }
 
 type interrupter struct {

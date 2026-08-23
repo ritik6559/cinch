@@ -5,20 +5,23 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
 
 const (
-	defaultProvider = "openai"
-	defaultModel    = "gpt-5.6"
+	defaultProvider  = "openai"
+	defaultModel     = "gpt-5.6"
+	defaultCompactAt = 100_000
 )
 
 type Config struct {
-	Provider string
-	APIKey   string
-	Model    string
-	BaseURL  string
+	Provider  string
+	APIKey    string
+	Model     string
+	BaseURL   string
+	CompactAt int
 }
 
 func Load() (Config, error) {
@@ -36,11 +39,21 @@ func Load() (Config, error) {
 		model = defaultModel
 	}
 
+	compactAt := defaultCompactAt
+	if v := os.Getenv("CINCH_COMPACT_AT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("CINCH_COMPACT_AT must be a positive number, got %q", v)
+		}
+		compactAt = n
+	}
+
 	return Config{
-		Provider: provider,
-		APIKey:   firstEnv(KeyEnvFor(provider), "CINCH_API_KEY"),
-		Model:    model,
-		BaseURL:  os.Getenv("CINCH_BASE_URL"),
+		Provider:  provider,
+		APIKey:    firstEnv(KeyEnvFor(provider), "CINCH_API_KEY"),
+		Model:     model,
+		BaseURL:   os.Getenv("CINCH_BASE_URL"),
+		CompactAt: compactAt,
 	}, nil
 }
 
