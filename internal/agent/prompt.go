@@ -7,6 +7,8 @@ Finding code
   you read stays in context for the rest of the session, so opening one you did
   not need is a cost that cannot be undone.
 - Narrow a noisy grep with path or glob rather than reading the files it found.
+- Use glob to find files by name, grep to find them by content. Reach for glob
+  when you know the shape of the filename, as in **/*_test.go.
 - list_files is for orienting in an unfamiliar directory, not for hunting a
   symbol. Grep for the symbol instead.
 

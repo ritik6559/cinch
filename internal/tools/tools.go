@@ -148,6 +148,26 @@ func (t *Tools) Definitions() []llm.ToolDef {
 			},
 		},
 		{
+			Name: "glob",
+			Description: "Find files by name pattern. * matches within one name, ** matches any number of directories, ? matches one character. " +
+				"Returns matching paths, one per line. Use this to find files by name; use grep to find them by content.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "Name pattern, for example **/*_test.go or internal/**/config.go",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Relative directory to search under. Defaults to the workspace root.",
+					},
+				},
+				"required":             []string{"pattern"},
+				"additionalProperties": false,
+			},
+		},
+		{
 			Name: "bash",
 			Description: "Run a shell command in the workspace root and return its combined output and exit status. " +
 				"Use it to build, run tests, and inspect git. Commands are POSIX shell, never PowerShell, on every platform. " +
@@ -206,6 +226,8 @@ func (t *Tools) Run(ctx context.Context, name, arguments string) string {
 		return t.listFiles(args.Dir)
 	case "grep":
 		return t.grep(ctx, args.Pattern, args.Path, args.Glob, args.CaseInsensitive)
+	case "glob":
+		return t.glob(args.Pattern, args.Path)
 	case "bash":
 		return t.bash(ctx, args.Command, args.Timeout)
 	}
@@ -253,6 +275,12 @@ func Summary(name, arguments string) string {
 			return fmt.Sprintf("grep %q in %s", args.Pattern, args.Path)
 		}
 		return fmt.Sprintf("grep %q", args.Pattern)
+
+	case "glob":
+		if args.Path != "" {
+			return fmt.Sprintf("glob %s in %s", args.Pattern, args.Path)
+		}
+		return "glob " + args.Pattern
 
 	case "bash":
 		return "run: " + firstLine(args.Command, 100)
