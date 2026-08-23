@@ -26,17 +26,24 @@ const summaryRequest = "\n\nSummarize the conversation above following your inst
 const summaryPreamble = "Earlier conversation was compacted to fit the context window. Summary of what happened so far:\n\n"
 
 // maxRenderedResult caps each tool result when the transcript is rendered for
-// summarizing. The transcript is being summarized because it is too large, so
-// handing all of it back unbounded could exceed the window on the way in.
+// summarizing.
 const maxRenderedResult = 2000
 
 type SummarizeOptions struct {
 	// KeepRecent is how many messages at the end stay.
 	KeepRecent int
+
+	// MinMessages is the fewest messages worth replacing with a summary.
+	MinMessages int
 }
 
 func DefaultSummarizeOptions() SummarizeOptions {
-	return SummarizeOptions{KeepRecent: 20}
+	return SummarizeOptions{KeepRecent: 20, MinMessages: 4}
+}
+
+// CanSummarize reports whether there is enough history to be worth an inference.
+func CanSummarize(messages []llm.Message, opts SummarizeOptions) bool {
+	return SafeSplitPoint(messages, len(messages)-opts.KeepRecent) >= max(opts.MinMessages, 1)
 }
 
 type SummaryResult struct {
@@ -46,15 +53,13 @@ type SummaryResult struct {
 
 // Summarize replaces the older part of a conversation with a single summary
 func Summarize(ctx context.Context, p llm.Provider, messages []llm.Message, opts SummarizeOptions) ([]llm.Message, SummaryResult, error) {
-	split := SafeSplitPoint(messages, len(messages)-opts.KeepRecent)
-	if split <= 0 {
+	if !CanSummarize(messages, opts) {
 		return messages, SummaryResult{}, nil
 	}
+	split := SafeSplitPoint(messages, len(messages)-opts.KeepRecent)
 
 	// The old turns are rendered as plain text rather than replayed as
-	// messages. Replaying them would mean sending tool calls without their tool
-	// definitions, and reasoning items out of position — both of which a
-	// provider may reject. The summarizer needs the content, not the structure.
+	// messages.
 	transcript := render(messages[:split])
 
 	resp, err := p.Complete(ctx, llm.Request{

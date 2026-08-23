@@ -158,9 +158,7 @@ func runCompaction(ctx context.Context, env *Env, d compactDeps, currentTokens i
 	// still have nothing to summarize, because one enormous turn is not
 	// history. Saying "summarizing..." and then doing nothing is worse than
 	// staying quiet.
-	if d.limit > 0 && remaining > d.limit &&
-		compact.SafeSplitPoint(messages, len(messages)-opts.KeepRecent) > 0 {
-
+	if d.limit > 0 && remaining > d.limit && compact.CanSummarize(messages, opts) {
 		fmt.Fprintln(env.Stdout, "  clearing was not enough, summarizing...")
 
 		next, result, err := compact.Summarize(ctx, d.provider, messages, opts)

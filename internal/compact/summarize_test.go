@@ -231,3 +231,56 @@ func TestRenderSkipsThinkingAndClipsResults(t *testing.T) {
 		t.Errorf("tool result was not clipped: %d bytes", len(got))
 	}
 }
+
+// Once a summary exists it sits at index 0, the message after it is a user
+// turn, and the split point lands at 1. Summarizing that single message costs
+// an API call, saves nothing, and degrades the summary a little more each time.
+func TestDoesNotResummarizeJustTheSummary(t *testing.T) {
+	p := &fakeProvider{summary: "first summary"}
+	opts := SummarizeOptions{KeepRecent: 8, MinMessages: 4}
+
+	once, first, err := Summarize(context.Background(), p, turns(10), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Summarized == 0 {
+		t.Fatal("the first pass summarized nothing")
+	}
+
+	callsAfterFirst := len(p.requests)
+
+	_, second, err := Summarize(context.Background(), p, once, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Summarized != 0 {
+		t.Errorf("second pass summarized %d messages, want 0", second.Summarized)
+	}
+	if len(p.requests) != callsAfterFirst {
+		t.Error("a provider call was made when there was nothing worth summarizing")
+	}
+}
+
+func TestCanSummarizeMatchesSummarize(t *testing.T) {
+	opts := SummarizeOptions{KeepRecent: 8, MinMessages: 4}
+
+	cases := [][]llm.Message{
+		nil,
+		turns(1),
+		turns(2),
+		turns(10),
+	}
+
+	for i, messages := range cases {
+		p := &fakeProvider{summary: "ok"}
+		_, result, err := Summarize(context.Background(), p, messages, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := result.Summarized > 0
+		if got := CanSummarize(messages, opts); got != want {
+			t.Errorf("case %d: CanSummarize = %v but Summarize did %d messages", i, got, result.Summarized)
+		}
+	}
+}
