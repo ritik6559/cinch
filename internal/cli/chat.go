@@ -81,6 +81,7 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 	}
 
 	a := agent.New(p, ts, approve, env.Stdout)
+	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
 	if len(sess.Messages) > 0 {
 		a.Restore(sess.Messages, sess.Usage)
 	}
@@ -102,7 +103,7 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 		}
 
 		if line == "/compact" {
-			runCompaction(env, a, sess)
+			runCompaction(ctx, env, deps, a.TurnUsage().InputTokens)
 			continue
 		}
 
@@ -132,29 +133,77 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 		// Fires one turn late: nothing counts tokens locally, so the trigger is
 		// the size of the request we just sent.
 		if cfg.CompactAt > 0 && a.TurnUsage().InputTokens > cfg.CompactAt {
-			runCompaction(env, a, sess)
+			runCompaction(ctx, env, deps, a.TurnUsage().InputTokens)
 		}
 	}
 }
 
-func runCompaction(env *Env, a *agent.Agent, sess *session.Session) {
-	messages, result := compact.ToolResults(a.Messages(), compact.DefaultOptions())
-	if result.Cleared == 0 {
-		fmt.Fprintln(env.Stdout, "  nothing to compact")
+type compactDeps struct {
+	agent    *agent.Agent
+	session  *session.Session
+	provider llm.Provider
+	limit    int
+}
+
+// runCompaction shrinks the conversation in two layers.
+func runCompaction(ctx context.Context, env *Env, d compactDeps, currentTokens int) {
+	messages, cleared := compact.ToolResults(d.agent.Messages(), compact.DefaultOptions())
+
+	remaining := currentTokens - cleared.EstimatedTokens()
+	var summarized compact.SummaryResult
+
+	opts := compact.DefaultSummarizeOptions()
+
+	// Checked before announcing: a conversation can be far over the limit and
+	// still have nothing to summarize, because one enormous turn is not
+	// history. Saying "summarizing..." and then doing nothing is worse than
+	// staying quiet.
+	if d.limit > 0 && remaining > d.limit &&
+		compact.SafeSplitPoint(messages, len(messages)-opts.KeepRecent) > 0 {
+
+		fmt.Fprintln(env.Stdout, "  clearing was not enough, summarizing...")
+
+		next, result, err := compact.Summarize(ctx, d.provider, messages, opts)
+		if err != nil {
+			// Clearing may still have helped, so keep what we have.
+			fmt.Fprintf(env.Stderr, "warning: could not summarize: %v\n", err)
+		} else {
+			messages, summarized = next, result
+		}
+	}
+
+	if cleared.Cleared == 0 && summarized.Summarized == 0 {
+		fmt.Fprintln(env.Stdout, "  nothing more to compact")
 		return
 	}
 
-	a.Restore(messages, a.Usage())
+	// The summarizing call costs tokens too, and hiding that would make the
+	// session total wrong.
+	total := d.agent.Usage()
+	total.Add(summarized.Usage)
+	d.agent.Restore(messages, total)
 
 	// Persist the smaller form, or resuming would restore everything we just
-	// cleared.
-	sess.Messages = messages
-	if err := sess.Save(); err != nil {
+	// removed.
+	d.session.Messages = messages
+	d.session.Usage = total
+	if err := d.session.Save(); err != nil {
 		fmt.Fprintf(env.Stderr, "warning: could not save session: %v\n", err)
 	}
 
-	fmt.Fprintf(env.Stdout, "  compacted %d tool results, freed about %s tokens\n",
-		result.Cleared, comma(result.EstimatedTokens()))
+	report(env, cleared, summarized)
+}
+
+func report(env *Env, cleared compact.Result, summarized compact.SummaryResult) {
+	var parts []string
+	if cleared.Cleared > 0 {
+		parts = append(parts, fmt.Sprintf("cleared %d tool results (about %s tokens)",
+			cleared.Cleared, comma(cleared.EstimatedTokens())))
+	}
+	if summarized.Summarized > 0 {
+		parts = append(parts, fmt.Sprintf("summarized %d messages", summarized.Summarized))
+	}
+	fmt.Fprintf(env.Stdout, "  compacted: %s\n", strings.Join(parts, ", "))
 }
 
 type interrupter struct {
