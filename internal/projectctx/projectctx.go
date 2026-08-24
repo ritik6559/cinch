@@ -33,7 +33,7 @@ func Load(root string) (string, error) {
 	for cut > 0 && !utf8.RuneStart(text[cut]) {
 		cut--
 	}
-	return text[:cut] + fmt.Sprintf("\n\n[truncated: %s is larger than %d KB]", FileName, maxBytes/1024), nil 
+	return text[:cut] + fmt.Sprintf("\n\n[truncated: %s is larger than %d KB]", FileName, maxBytes/1024), nil
 }
 
 func Wrap(base, instructions string) string {

@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/ritik6559/cinch/internal/config"
+	"github.com/ritik6559/cinch/internal/projectctx"
 	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/version"
@@ -55,6 +56,7 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 	}
 	checks = append(checks, configChecks()...)
 	checks = append(checks, sessionCheck())
+	checks = append(checks, agentsCheck())
 	checks = append(checks,
 		binary("bash", "required by the bash tool"),
 		binary("git", "how you review and undo the changes cinch makes"),
@@ -76,6 +78,22 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 		return fmt.Errorf("%d check(s) failed", failed)
 	}
 	return nil
+}
+
+func agentsCheck() check {
+	root, err := os.Getwd()
+	if err != nil {
+		return check{projectctx.FileName, warn, err.Error()}
+	}
+
+	instructions, err := projectctx.Load(root)
+	if err != nil {
+		return check{projectctx.FileName, warn, err.Error()}
+	}
+	if instructions == "" {
+		return check{projectctx.FileName, warn, "not found — this repository gives cinch no project-specific instructions"}
+	}
+	return check{projectctx.FileName, pass, fmt.Sprintf("%d bytes", len(instructions))}
 }
 
 func configChecks() []check {

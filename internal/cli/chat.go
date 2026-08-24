@@ -16,6 +16,7 @@ import (
 	"github.com/ritik6559/cinch/internal/compact"
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/llm"
+	"github.com/ritik6559/cinch/internal/projectctx"
 	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/tools"
@@ -84,6 +85,15 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
 	if len(sess.Messages) > 0 {
 		a.Restore(sess.Messages, sess.Usage)
+	}
+
+	instructions, err := projectctx.Load(root)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "warning: could not read %s: %v\n", projectctx.FileName, err)
+	}
+	if instructions != "" {
+		a.SetSystemPrompt(projectctx.Wrap(agent.DefaultSystemPrompt, instructions))
+		fmt.Fprintf(env.Stdout, "using %s from this repository\n", projectctx.FileName)
 	}
 
 	announce(env, sess, root)
