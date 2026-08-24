@@ -57,8 +57,6 @@ func (t *Tools) glob(pattern, path string) string {
 			return fs.SkipAll
 		}
 
-		// Results are reported from the workspace root, so they can be handed
-		// straight back to read_file.
 		rel, err := filepath.Rel(t.root, p)
 		if err != nil {
 			return nil
@@ -82,13 +80,7 @@ func (t *Tools) glob(pattern, path string) string {
 	return out
 }
 
-// globToRegexp translates a shell-style pattern, where "*" is any run of
-// characters within one name, "**" is any number of directories, and "?" is a
-// single character.
-//
-// Character classes such as [abc] are not supported: they are matched
-// literally. Adding them would mean a real parser, and a model asking for a
-// class is far rarer than one asking for **/*.go.
+// globToRegexp translates a shell-style pattern.
 func globToRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
@@ -98,8 +90,6 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 		case '*':
 			if i+1 < len(pattern) && pattern[i+1] == '*' {
 				i++
-				// "**/" spans any number of directories, including none, so
-				// "**/*.go" also matches a .go file in the root itself.
 				if i+1 < len(pattern) && pattern[i+1] == '/' {
 					i++
 					b.WriteString("(?:[^/]+/)*")
