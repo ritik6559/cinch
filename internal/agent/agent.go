@@ -14,7 +14,10 @@ const maxSteps = 25
 
 var ErrMaxSteps = errors.New("reached step limit")
 
-type Approver func(tool, summary string) bool
+// Approver decides whether a tool call may run. It receives the raw
+// arguments as well as the summary, so a caller can match on the command a
+// bash call is about to run rather than on the display text.
+type Approver func(tool, summary, arguments string) bool
 
 type Agent struct {
 	provider llm.Provider
@@ -117,7 +120,7 @@ func (a *Agent) answerAbandonedCalls() {
 
 func (a *Agent) execute(ctx context.Context, call llm.ToolUse, summary string) llm.ToolResult {
 	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
-		if !a.approver(call.Name, summary) {
+		if !a.approver(call.Name, summary, string(call.Input)) {
 			return llm.ToolResult{
 				ToolUseID: call.ID,
 				Content: "denied: the user rejected this tool call. " +

@@ -1,6 +1,5 @@
 name: ci
 
-# Run on every push to main, and on every pull request.
 on:
   push:
     branches: [main]
@@ -9,8 +8,6 @@ on:
 jobs:
   test:
     strategy:
-      # Without this, GitHub cancels the other job as soon as one fails. We want
-      # both results, so we can tell whether a failure is platform specific.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -19,9 +16,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      # Reading the version from go.mod means CI and the developer machine
-      # cannot drift apart.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -30,9 +24,6 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
-
-  # Formatting is a separate job: it is fast, and a style problem is a different
-  # kind of problem from a broken test.
   format:
     runs-on: ubuntu-latest
     steps:

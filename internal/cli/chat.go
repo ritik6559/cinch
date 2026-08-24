@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/ritik6559/cinch/internal/agent"
+	"github.com/ritik6559/cinch/internal/approval"
 	"github.com/ritik6559/cinch/internal/compact"
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/llm"
@@ -60,26 +61,14 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 	}
 
 	scanner := bufio.NewScanner(env.Stdin)
-	always := map[string]bool{}
 
-	approve := func(tool, summary string) bool {
-		if always[tool] {
-			return true
-		}
-		fmt.Fprintf(env.Stdout, "\nallow %s? [y/N/a] ", summary)
-		if !scanner.Scan() {
-			return false
-		}
-		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
-		case "y", "yes":
-			return true
-		case "a", "always":
-			always[tool] = true
-			return true
-		default:
-			return false
-		}
+	saved, err := approval.Load()
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "warning: could not read saved approvals: %v\n", err)
+		saved = &approval.Store{}
 	}
+
+	approve := approver(env, scanner, saved)
 
 	a := agent.New(p, ts, approve, env.Stdout)
 	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
@@ -343,4 +332,76 @@ func comma(n int) string {
 		b.WriteString(s[i : i+3])
 	}
 	return b.String()
+}
+
+// approver builds the prompt shown before a tool that changes something runs.
+//
+// Answers:
+//
+//	y  once
+//	a  for the rest of this session
+//	s  permanently, saved to ~/.cinch/approvals.json
+//
+// Anything else, including end of input, is a refusal. A prompt that defaults
+// to yes is not a prompt.
+//
+// bash is not offered "a". Blanket shell access for a whole session is a much
+// larger grant than the prompt appears to be asking for, and "s" covers the
+// real need better: it saves a command prefix, so approving "go test" does not
+// approve "rm".
+func approver(env *Env, scanner *bufio.Scanner, saved *approval.Store) agent.Approver {
+	session := map[string]bool{}
+
+	return func(tool, summary, arguments string) bool {
+		command := tools.CommandOf(arguments)
+
+		if session[tool] || saved.Allows(tool, command) {
+			return true
+		}
+
+		answers := "[y/N/a/s]"
+		if tool == "bash" {
+			answers = "[y/N/s]"
+		}
+		fmt.Fprintf(env.Stdout, "\nallow %s? %s ", summary, answers)
+
+		if !scanner.Scan() {
+			return false
+		}
+
+		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+		case "y", "yes":
+			return true
+
+		case "a", "always":
+			if tool == "bash" {
+				fmt.Fprintln(env.Stdout, "  not offered for bash — use s to save a command prefix")
+				return false
+			}
+			session[tool] = true
+			return true
+
+		case "s", "save":
+			remember(env, saved, tool, command)
+			return true
+
+		default:
+			return false
+		}
+	}
+}
+
+func remember(env *Env, saved *approval.Store, tool, command string) {
+	prefix := ""
+	if tool == "bash" {
+		prefix = approval.PrefixFor(command)
+	}
+
+	if saved.Add(tool, prefix) {
+		if err := saved.Save(); err != nil {
+			fmt.Fprintf(env.Stderr, "warning: could not save approval: %v\n", err)
+			return
+		}
+	}
+	fmt.Fprintf(env.Stdout, "  saved: %s\n", approval.Describe(tool, prefix))
 }

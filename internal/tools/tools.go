@@ -318,3 +318,11 @@ func snippet(s string) string {
 	}
 	return fmt.Sprintf("%q", first)
 }
+
+func CommandOf(arguments string) string {
+	var args toolArgs
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return ""
+	}
+	return args.Command
+}

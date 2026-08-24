@@ -87,7 +87,7 @@ func TestDeniedToolStillProducesAResult(t *testing.T) {
 		assistantText("understood"),
 	}}
 
-	denyAll := func(tool, summary string) bool { return false }
+	denyAll := func(tool, summary, arguments string) bool { return false }
 	a, _ := newTestAgent(t, provider, denyAll)
 
 	if err := a.Run(context.Background(), "write a file"); err != nil {
@@ -122,7 +122,7 @@ func TestApprovedToolRuns(t *testing.T) {
 		assistantText("written"),
 	}}
 
-	allowAll := func(tool, summary string) bool { return true }
+	allowAll := func(tool, summary, arguments string) bool { return true }
 	a, _ := newTestAgent(t, provider, allowAll)
 
 	if err := a.Run(context.Background(), "write a file"); err != nil {

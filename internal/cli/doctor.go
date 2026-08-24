@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"text/tabwriter"
 
+	"github.com/ritik6559/cinch/internal/approval"
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/projectctx"
 	"github.com/ritik6559/cinch/internal/provider"
@@ -57,6 +58,7 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 	checks = append(checks, configChecks()...)
 	checks = append(checks, sessionCheck())
 	checks = append(checks, agentsCheck())
+	checks = append(checks, approvalsCheck())
 	checks = append(checks,
 		binary("bash", "required by the bash tool"),
 		binary("git", "how you review and undo the changes cinch makes"),
@@ -149,4 +151,15 @@ func providerCheck(cfg config.Config) check {
 		return check{"provider", fail, err.Error()}
 	}
 	return check{"provider", pass, cfg.Provider}
+}
+
+func approvalsCheck() check {
+	saved, err := approval.Load()
+	if err != nil {
+		return check{"approvals", warn, err.Error()}
+	}
+	if len(saved.Rules) == 0 {
+		return check{"approvals", pass, "none saved"}
+	}
+	return check{"approvals", pass, fmt.Sprintf("%d saved", len(saved.Rules))}
 }

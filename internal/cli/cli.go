@@ -50,6 +50,7 @@ type Command struct {
 
 func commands() []*Command {
 	return []*Command{
+		approvalsCmd(),
 		chatCmd(),
 		doctorCmd(),
 		sessionsCmd(),

@@ -87,6 +87,8 @@ cinch: Changed it at internal/agent/agent.go:14. Tests pass.
 |---|---|
 | `cinch` | Start a chat session (same as `cinch chat`) |
 | `cinch sessions` | List saved sessions |
+| `cinch approvals` | List saved approvals |
+| `cinch approvals rm <prefix>` | Take a saved approval back |
 | `cinch doctor` | Check that the local setup is complete |
 | `cinch version` | Print version information |
 | `cinch help` | Show all commands |
@@ -126,6 +128,38 @@ The model can use these, and nothing else:
 | `write_file` | yes | Create a file or replace it completely |
 | `edit_file` | yes | Replace an exact string in a file |
 | `bash` | yes | Run a shell command and return its output and exit status |
+
+## Approvals
+
+`write_file`, `edit_file` and `bash` ask before they run. The prompt shows what
+is about to happen, and the default answer is no:
+
+```
+allow run: go test ./...? [y/N/s]
+```
+
+| Answer | Meaning |
+|---|---|
+| `y` | Allow this one call |
+| `n`, Enter, anything else | Refuse |
+| `a` | Allow this tool for the rest of the session (not offered for `bash`) |
+| `s` | Save it, so it never asks again |
+
+Answering `s` on a `bash` prompt saves a **command prefix**, not the whole
+command. `go test ./internal/agent` saves as `go test`, so it covers the next
+run with different arguments — but approving `go test` never approves `rm`.
+The prefix ends at a word boundary, so `go test` does not match `go testify`.
+
+```bash
+cinch approvals                  # see what is saved
+cinch approvals rm "go test"     # take one back
+```
+
+Approvals live in `~/.cinch/approvals.json`.
+
+`a` is deliberately not offered for `bash`. Allowing every shell command for a
+whole session is a much larger grant than the prompt appears to be asking for,
+and `s` covers the real need better.
 
 ## Project instructions
 
@@ -184,15 +218,14 @@ Type `/compact` to shrink the conversation by hand.
   contain `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` are removed
   before a `bash` command runs, so `env` cannot leak your key.
 - **Approval.** Tools that change files or run commands ask first, and the
-  default answer is no. Answer `a` to allow that tool for the rest of the
-  session.
+  default answer is no. See [Approvals](#approvals).
 - **Step limit.** One request runs at most 25 model turns, so a confused model
   cannot loop forever.
 
-Two limits worth knowing. **`bash` breaks workspace confinement** — `cd ..`
-works, and the path checks do not apply to a shell. And answering `a` to a bash
-prompt grants shell access for the rest of the session, which is a much larger
-grant than `a` on `edit_file`.
+One limit worth knowing: **`bash` breaks workspace confinement.** `cd ..` works,
+and the path checks do not apply to a shell. Approval is the only control on it,
+which is why saved approvals for `bash` are command prefixes rather than a
+blanket allow.
 
 cinch does not sandbox anything. Run it in a git repository, so you can always
 see and undo what it changed.
