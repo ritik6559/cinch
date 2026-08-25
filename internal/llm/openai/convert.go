@@ -34,8 +34,13 @@ func (c *Client) lowerRequest(req llm.Request) (map[string]any, error) {
 		})
 	}
 
+	model := req.Model
+	if model == "" {
+		model = c.model
+	}
+
 	payload := map[string]any{
-		"model":   c.model,
+		"model":   model,
 		"input":   input,
 		"tools":   tools,
 		"store":   false,
@@ -44,6 +49,9 @@ func (c *Client) lowerRequest(req llm.Request) (map[string]any, error) {
 	}
 	if req.System != "" {
 		payload["instructions"] = req.System
+	}
+	if req.Effort != "" {
+		payload["reasoning"] = map[string]any{"effort": req.Effort}
 	}
 	return payload, nil
 }

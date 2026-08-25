@@ -72,6 +72,8 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 
 	printer := &replPrinter{env: env}
 	a := agent.New(p, ts, approve, printer.hooks())
+	a.SetModel(cfg.Model)
+	a.SetEffort(cfg.Effort)
 	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
 	if len(sess.Messages) > 0 {
 		a.Restore(sess.Messages, sess.Usage)
@@ -131,8 +133,6 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 
 		fmt.Fprintln(env.Stdout, usageLine(a.TurnUsage(), a.Usage()))
 
-		// Fires one turn late: nothing counts tokens locally, so the trigger is
-		// the size of the request we just sent.
 		if cfg.CompactAt > 0 && a.TurnUsage().InputTokens > cfg.CompactAt {
 			runCompaction(ctx, env, deps, a.TurnUsage().InputTokens)
 		}
@@ -146,7 +146,6 @@ type compactDeps struct {
 	limit    int
 }
 
-// runCompaction shrinks the conversation in two layers.
 func runCompaction(ctx context.Context, env *Env, d compactDeps, currentTokens int) {
 	messages, cleared := compact.ToolResults(d.agent.Messages(), compact.DefaultOptions())
 
@@ -155,16 +154,11 @@ func runCompaction(ctx context.Context, env *Env, d compactDeps, currentTokens i
 
 	opts := compact.DefaultSummarizeOptions()
 
-	// Checked before announcing: a conversation can be far over the limit and
-	// still have nothing to summarize, because one enormous turn is not
-	// history. Saying "summarizing..." and then doing nothing is worse than
-	// staying quiet.
 	if d.limit > 0 && remaining > d.limit && compact.CanSummarize(messages, opts) {
 		fmt.Fprintln(env.Stdout, "  clearing was not enough, summarizing...")
 
 		next, result, err := compact.Summarize(ctx, d.provider, messages, opts)
 		if err != nil {
-			// Clearing may still have helped, so keep what we have.
 			fmt.Fprintf(env.Stderr, "warning: could not summarize: %v\n", err)
 		} else {
 			messages, summarized = next, result
@@ -176,14 +170,10 @@ func runCompaction(ctx context.Context, env *Env, d compactDeps, currentTokens i
 		return
 	}
 
-	// The summarizing call costs tokens too, and hiding that would make the
-	// session total wrong.
 	total := d.agent.Usage()
 	total.Add(summarized.Usage)
 	d.agent.Restore(messages, total)
 
-	// Persist the smaller form, or resuming would restore everything we just
-	// removed.
 	d.session.Messages = messages
 	d.session.Usage = total
 	if err := d.session.Save(); err != nil {
@@ -210,7 +200,7 @@ type interrupter struct {
 	done    chan struct{}
 
 	mu     sync.Mutex
-	cancel context.CancelFunc // non-nil only while a turn is running
+	cancel context.CancelFunc 
 }
 
 func newInterrupter(env *Env) *interrupter {
@@ -336,21 +326,6 @@ func comma(n int) string {
 	return b.String()
 }
 
-// approver builds the prompt shown before a tool that changes something runs.
-//
-// Answers:
-//
-//	y  once
-//	a  for the rest of this session
-//	s  permanently, saved to ~/.cinch/approvals.json
-//
-// Anything else, including end of input, is a refusal. A prompt that defaults
-// to yes is not a prompt.
-//
-// bash is not offered "a". Blanket shell access for a whole session is a much
-// larger grant than the prompt appears to be asking for, and "s" covers the
-// real need better: it saves a command prefix, so approving "go test" does not
-// approve "rm".
 func approver(env *Env, scanner *bufio.Scanner, saved *approval.Store) agent.Approver {
 	session := map[string]bool{}
 
@@ -408,13 +383,6 @@ func remember(env *Env, saved *approval.Store, tool, command string) {
 	fmt.Fprintf(env.Stdout, "  saved: %s\n", approval.Describe(tool, prefix))
 }
 
-// replPrinter reproduces what the agent used to print when it held an
-// io.Writer.
-//
-// It tracks whether a line is open because the "cinch:" prefix is written
-// lazily — a turn that only calls tools should not print an empty one — and
-// because whatever comes next, a tool line or the usage line, needs that line
-// closed first.
 type replPrinter struct {
 	env     *Env
 	started bool
@@ -437,8 +405,6 @@ func (p *replPrinter) hooks() agent.Hooks {
 	}
 }
 
-// done closes an open line. Called at the end of a turn, and before anything
-// else writes.
 func (p *replPrinter) done() {
 	if p.started {
 		fmt.Fprintln(p.env.Stdout)

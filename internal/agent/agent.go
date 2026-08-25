@@ -60,6 +60,8 @@ type Agent struct {
 	approver Approver
 	hooks    Hooks
 	system   string
+	model    string
+	effort   string
 	messages []llm.Message
 
 	usage     llm.Usage
@@ -77,6 +79,14 @@ func New(provider llm.Provider, tls *tools.Tools, approver Approver, hooks Hooks
 }
 
 func (a *Agent) SetSystemPrompt(s string) { a.system = s }
+
+func (a *Agent) SetModel(m string) { a.model = m }
+
+func (a *Agent) Model() string { return a.model }
+
+func (a *Agent) SetEffort(e string) { a.effort = e }
+
+func (a *Agent) Effort() string { return a.effort }
 
 func (a *Agent) Usage() llm.Usage { return a.usage }
 
@@ -99,6 +109,8 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 			System:   a.system,
 			Messages: a.messages,
 			Tools:    a.tools.Definitions(),
+			Model:    a.model,
+			Effort:   a.effort,
 		}, a.hooks.text)
 		if err != nil {
 			return err

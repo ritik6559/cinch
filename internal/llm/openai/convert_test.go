@@ -7,11 +7,6 @@ import (
 	"github.com/ritik6559/cinch/internal/llm"
 )
 
-// Raising then lowering a reasoning item must give back identical bytes.
-//
-// If this breaks, the agent still works but silently gets worse at multi-step
-// tasks, because the model loses its own chain of thought between tool calls.
-// That is a failure with no error message, so it needs a test.
 func TestReasoningRoundTripsVerbatim(t *testing.T) {
 	const reasoning = `{"type":"reasoning","id":"rs_123","encrypted_content":"OPAQUE","summary":[]}`
 
@@ -70,8 +65,6 @@ func TestRaiseUsage(t *testing.T) {
 	}
 }
 
-// This API has no error flag on a tool result, so a failure has to be visible
-// in the text or the model cannot tell that anything went wrong.
 func TestLowerToolResultMarksErrors(t *testing.T) {
 	msg := llm.Message{Role: llm.RoleUser, Blocks: []llm.Block{
 		llm.ToolResult{ToolUseID: "call_9", Content: "file not found", IsError: true},
@@ -98,7 +91,6 @@ func TestLowerToolResultMarksErrors(t *testing.T) {
 	}
 }
 
-// User text and assistant text use different content types on the wire.
 func TestLowerTextUsesRoleSpecificContentType(t *testing.T) {
 	cases := []struct {
 		role llm.Role
@@ -136,7 +128,6 @@ func TestLowerTextUsesRoleSpecificContentType(t *testing.T) {
 	}
 }
 
-// One message item can carry several text parts.
 func TestRaiseMessageWithSeveralParts(t *testing.T) {
 	raw := []byte(`{"output":[{"type":"message","content":[
 		{"type":"output_text","text":"one "},
@@ -152,8 +143,6 @@ func TestRaiseMessageWithSeveralParts(t *testing.T) {
 	}
 }
 
-// The API gains new item types over time. An unknown one must be skipped, not
-// treated as a failure.
 func TestRaiseSkipsUnknownItems(t *testing.T) {
 	raw := []byte(`{"output":[
 		{"type":"something_new_in_2027","payload":{}},
@@ -166,5 +155,49 @@ func TestRaiseSkipsUnknownItems(t *testing.T) {
 	}
 	if got := resp.Message.TextContent(); got != "ok" {
 		t.Errorf("got %q, want %q", got, "ok")
+	}
+}
+
+func TestRequestModelOverridesTheClientDefault(t *testing.T) {
+	c := New("k", "client-default")
+
+	payload, err := c.lowerRequest(llm.Request{Model: "from-request"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["model"]; got != "from-request" {
+		t.Errorf("got model %v, want the request's", got)
+	}
+
+	payload, err = c.lowerRequest(llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["model"]; got != "client-default" {
+		t.Errorf("got model %v, want the client's default", got)
+	}
+}
+
+func TestEffortIsOmittedUnlessSet(t *testing.T) {
+	c := New("k", "m")
+
+	payload, err := c.lowerRequest(llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := payload["reasoning"]; present {
+		t.Error("reasoning must not be sent when no effort was asked for")
+	}
+
+	payload, err = c.lowerRequest(llm.Request{Effort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasoning, ok := payload["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("got %T, want a reasoning object", payload["reasoning"])
+	}
+	if reasoning["effort"] != "high" {
+		t.Errorf("got %v, want high", reasoning["effort"])
 	}
 }

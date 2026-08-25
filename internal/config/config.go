@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
+
+	"github.com/ritik6559/cinch/internal/llm"
 )
 
 const (
@@ -22,6 +25,10 @@ type Config struct {
 	Model     string
 	BaseURL   string
 	CompactAt int
+
+	// Effort is the reasoning level to ask for. Empty means the request says
+	// nothing and the provider applies its own default.
+	Effort string
 }
 
 func Load() (Config, error) {
@@ -48,12 +55,19 @@ func Load() (Config, error) {
 		compactAt = n
 	}
 
+	effort := os.Getenv("CINCH_EFFORT")
+	if effort != "" && !llm.ValidEffort(effort) {
+		return Config{}, fmt.Errorf("CINCH_EFFORT must be one of %s, got %q",
+			strings.Join(llm.Efforts, ", "), effort)
+	}
+
 	return Config{
 		Provider:  provider,
 		APIKey:    firstEnv(KeyEnvFor(provider), "CINCH_API_KEY"),
 		Model:     model,
 		BaseURL:   os.Getenv("CINCH_BASE_URL"),
 		CompactAt: compactAt,
+		Effort:    effort,
 	}, nil
 }
 

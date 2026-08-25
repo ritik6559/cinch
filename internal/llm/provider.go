@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 type ToolDef struct {
 	Name        string
@@ -22,10 +25,18 @@ func (u *Usage) Add(other Usage) {
 	u.ReasoningTokens += other.ReasoningTokens
 }
 
+var Efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+func ValidEffort(s string) bool {
+	return slices.Contains(Efforts, s)
+}
+
 type Request struct {
 	System   string
 	Messages []Message
 	Tools    []ToolDef
+	Model    string
+	Effort   string
 }
 
 type Response struct {
