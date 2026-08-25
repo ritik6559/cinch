@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"strings"
 
 	"github.com/ritik6559/cinch/internal/llm"
 	"github.com/ritik6559/cinch/internal/tools"
@@ -14,30 +14,65 @@ const maxSteps = 25
 
 var ErrMaxSteps = errors.New("reached step limit")
 
-// Approver decides whether a tool call may run. It receives the raw
-// arguments as well as the summary, so a caller can match on the command a
-// bash call is about to run rather than on the display text.
 type Approver func(tool, summary, arguments string) bool
+
+type Hooks struct {
+	// OnText receives model prose as it streams, a fragment at a time.
+	OnText func(text string)
+
+	// OnToolCall fires before a tool runs, after any approval.
+	OnToolCall func(name, summary string)
+
+	// OnToolResult fires when it finishes.
+	OnToolResult func(name, result string, isError bool)
+
+	// OnUsage fires once per provider call, not once per turn.
+	OnUsage func(u llm.Usage)
+}
+
+func (h Hooks) text(s string) {
+	if h.OnText != nil {
+		h.OnText(s)
+	}
+}
+
+func (h Hooks) toolCall(name, summary string) {
+	if h.OnToolCall != nil {
+		h.OnToolCall(name, summary)
+	}
+}
+
+func (h Hooks) toolResult(name, result string, isError bool) {
+	if h.OnToolResult != nil {
+		h.OnToolResult(name, result, isError)
+	}
+}
+
+func (h Hooks) usage(u llm.Usage) {
+	if h.OnUsage != nil {
+		h.OnUsage(u)
+	}
+}
 
 type Agent struct {
 	provider llm.Provider
 	tools    *tools.Tools
 	approver Approver
+	hooks    Hooks
 	system   string
-	out      io.Writer
 	messages []llm.Message
 
 	usage     llm.Usage
 	turnUsage llm.Usage
 }
 
-func New(provider llm.Provider, tls *tools.Tools, approver Approver, out io.Writer) *Agent {
+func New(provider llm.Provider, tls *tools.Tools, approver Approver, hooks Hooks) *Agent {
 	return &Agent{
 		provider: provider,
 		tools:    tls,
 		approver: approver,
+		hooks:    hooks,
 		system:   DefaultSystemPrompt,
-		out:      out,
 	}
 }
 
@@ -60,13 +95,11 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 	a.turnUsage = llm.Usage{}
 
 	for step := range maxSteps {
-		printer := &streamPrinter{out: a.out}
 		resp, err := a.provider.Complete(ctx, llm.Request{
 			System:   a.system,
 			Messages: a.messages,
 			Tools:    a.tools.Definitions(),
-		}, printer.write)
-		printer.done()
+		}, a.hooks.text)
 		if err != nil {
 			return err
 		}
@@ -74,6 +107,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 		a.messages = append(a.messages, resp.Message)
 		a.turnUsage.Add(resp.Usage)
 		a.usage.Add(resp.Usage)
+		a.hooks.usage(resp.Usage)
 
 		calls := resp.Message.ToolUses()
 		if len(calls) == 0 {
@@ -87,9 +121,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) error {
 
 		results := make([]llm.Block, 0, len(calls))
 		for _, call := range calls {
-			summary := tools.Summary(call.Name, string(call.Input))
-			fmt.Fprintf(a.out, " -> %s\n", summary)
-			results = append(results, a.execute(ctx, call, summary))
+			results = append(results, a.execute(ctx, call))
 		}
 		a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Blocks: results})
 	}
@@ -118,40 +150,23 @@ func (a *Agent) answerAbandonedCalls() {
 	a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Blocks: results})
 }
 
-func (a *Agent) execute(ctx context.Context, call llm.ToolUse, summary string) llm.ToolResult {
+func (a *Agent) execute(ctx context.Context, call llm.ToolUse) llm.ToolResult {
+	summary := tools.Summary(call.Name, string(call.Input))
+
 	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
 		if !a.approver(call.Name, summary, string(call.Input)) {
-			return llm.ToolResult{
-				ToolUseID: call.ID,
-				Content: "denied: the user rejected this tool call. " +
-					"Do not retry it — explain what you were going to do and ask how to proceed.",
-				IsError: true,
-			}
+			const denied = "denied: the user rejected this tool call. " +
+				"Do not retry it — explain what you were going to do and ask how to proceed."
+
+			a.hooks.toolResult(call.Name, denied, true)
+			return llm.ToolResult{ToolUseID: call.ID, Content: denied, IsError: true}
 		}
 	}
 
-	return llm.ToolResult{
-		ToolUseID: call.ID,
-		Content:   a.tools.Run(ctx, call.Name, string(call.Input)),
-	}
-}
+	a.hooks.toolCall(call.Name, summary)
 
-type streamPrinter struct {
-	out     io.Writer
-	started bool
-}
+	result := a.tools.Run(ctx, call.Name, string(call.Input))
+	a.hooks.toolResult(call.Name, result, strings.HasPrefix(result, "error:"))
 
-func (p *streamPrinter) write(text string) {
-	if !p.started {
-		fmt.Fprint(p.out, "\ncinch: ")
-		p.started = true
-	}
-	fmt.Fprint(p.out, text)
-}
-
-func (p *streamPrinter) done() {
-	if p.started {
-		fmt.Fprintln(p.out)
-		p.started = false
-	}
+	return llm.ToolResult{ToolUseID: call.ID, Content: result}
 }

@@ -70,7 +70,8 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 
 	approve := approver(env, scanner, saved)
 
-	a := agent.New(p, ts, approve, env.Stdout)
+	printer := &replPrinter{env: env}
+	a := agent.New(p, ts, approve, printer.hooks())
 	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
 	if len(sess.Messages) > 0 {
 		a.Restore(sess.Messages, sess.Usage)
@@ -109,6 +110,7 @@ func runChat(ctx context.Context, env *Env, args []string) error {
 		turnCtx, endTurn := interrupt.beginTurn(ctx)
 		runErr := a.Run(turnCtx, line)
 		endTurn()
+		printer.done()
 
 		sess.SetTitle(line)
 		sess.Messages = a.Messages()
@@ -404,4 +406,42 @@ func remember(env *Env, saved *approval.Store, tool, command string) {
 		}
 	}
 	fmt.Fprintf(env.Stdout, "  saved: %s\n", approval.Describe(tool, prefix))
+}
+
+// replPrinter reproduces what the agent used to print when it held an
+// io.Writer.
+//
+// It tracks whether a line is open because the "cinch:" prefix is written
+// lazily — a turn that only calls tools should not print an empty one — and
+// because whatever comes next, a tool line or the usage line, needs that line
+// closed first.
+type replPrinter struct {
+	env     *Env
+	started bool
+}
+
+func (p *replPrinter) hooks() agent.Hooks {
+	return agent.Hooks{
+		OnText: func(text string) {
+			if !p.started {
+				fmt.Fprint(p.env.Stdout, "\ncinch: ")
+				p.started = true
+			}
+			fmt.Fprint(p.env.Stdout, text)
+		},
+
+		OnToolCall: func(name, summary string) {
+			p.done()
+			fmt.Fprintf(p.env.Stdout, " -> %s\n", summary)
+		},
+	}
+}
+
+// done closes an open line. Called at the end of a turn, and before anything
+// else writes.
+func (p *replPrinter) done() {
+	if p.started {
+		fmt.Fprintln(p.env.Stdout)
+		p.started = false
+	}
 }

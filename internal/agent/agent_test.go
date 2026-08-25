@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -45,7 +46,11 @@ func newTestAgent(t *testing.T, p llm.Provider, approve Approver) (*Agent, *byte
 		t.Fatal(err)
 	}
 	out := &bytes.Buffer{}
-	return New(p, ts, approve, out), out
+	hooks := Hooks{
+		OnText:     func(text string) { out.WriteString(text) },
+		OnToolCall: func(name, summary string) { fmt.Fprintf(out, "\n -> %s\n", summary) },
+	}
+	return New(p, ts, approve, hooks), out
 }
 
 func assistantText(s string) llm.Response {
