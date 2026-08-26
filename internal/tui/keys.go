@@ -58,12 +58,28 @@ func (m *Model) onKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "pgup":
-		m.viewport.ScrollUp(m.viewport.Height() / 2)
+		m.scroll(m.viewport.HalfPageUp)
 		return m, nil
 
 	case "pgdown":
-		m.viewport.ScrollDown(m.viewport.Height() / 2)
+		m.scroll(m.viewport.HalfPageDown)
 		return m, nil
+
+	case "shift+up", "ctrl+up":
+		m.scroll(func() { m.viewport.ScrollUp(1) })
+		return m, nil
+
+	case "shift+down", "ctrl+down":
+		m.scroll(func() { m.viewport.ScrollDown(1) })
+		return m, nil
+
+	// Only steal end while scrolled up, where it means "back to live". At the
+	// bottom that would be a no-op, so leave it to the textarea for editing.
+	case "end":
+		if !m.follow {
+			m.scroll(func() { m.viewport.GotoBottom() })
+			return m, nil
+		}
 	}
 
 	var cmd tea.Cmd
@@ -116,6 +132,7 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 	m.entries = append(m.entries, entry{kind: entryUser, text: line})
 	m.sess.SetTitle(line)
 	m.streaming = false
+	m.follow = true // sending a message means you want to watch the answer
 	m.refresh()
 
 	return m, m.startTurn(line)
@@ -156,7 +173,7 @@ func newInput() textarea.Model {
 	ta.Prompt = "› "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
-	ta.SetHeight(3)
+	ta.SetHeight(inputHeight)
 	ta.Focus()
 	return ta
 }

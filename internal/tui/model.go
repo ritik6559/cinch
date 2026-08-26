@@ -30,6 +30,12 @@ const (
 	modePicking
 )
 
+const (
+	inputHeight = 5 // rows of the prompt box
+	minViewport = 3 // never collapse the conversation entirely
+	wheelLines  = 3 // rows per notch of the mouse wheel
+)
+
 type Model struct {
 	agent    *agent.Agent
 	provider llm.Provider
@@ -58,6 +64,8 @@ type Model struct {
 	glamour  *glamour.TermRenderer
 	theme    Theme
 	dark     bool
+
+	follow bool
 
 	width  int
 	height int
@@ -97,6 +105,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
+
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.scroll(func() { m.viewport.ScrollUp(wheelLines) })
+		case tea.MouseWheelDown:
+			m.scroll(func() { m.viewport.ScrollDown(wheelLines) })
+		}
+		return m, nil
 
 	case textMsg:
 		m.appendText(string(msg))
@@ -155,31 +172,68 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	var v tea.View
 	v.WindowTitle = "cinch"
+	v.MouseMode = tea.MouseModeCellMotion
 
 	if m.quitting {
 		return v
 	}
 
-	parts := []string{m.viewport.View(), m.status()}
+	chrome := m.chrome()
+	m.viewport.SetHeight(max(m.height-lipgloss.Height(chrome), minViewport))
+	if m.follow {
+		m.viewport.GotoBottom()
+	}
 
-	switch {
-	case m.mode == modeWorking:
+	v.Content = lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), chrome)
+	return v
+}
+
+func (m *Model) chrome() string {
+	parts := []string{m.scrollHint(), m.status()}
+
+	switch m.mode {
+	case modeWorking:
 		parts = append(parts, m.work.line(m.theme, m.turnTokens))
-	case m.mode == modeApproving:
+	case modeApproving:
 		parts = append(parts, m.approvalPrompt())
-	case m.mode == modePicking:
+	case modePicking:
 		parts = append(parts, m.picker.view(m.theme))
 	}
 
 	if m.mode == modeIdle || m.mode == modeWorking {
 		parts = append(parts, m.input.View())
-		if popup := m.commandPopup(); popup != "" {
-			parts = append(parts, popup)
-		}
+		parts = append(parts, m.commandPopup())
 	}
 
-	v.Content = lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return v
+	return lipgloss.JoinVertical(lipgloss.Left, nonEmpty(parts)...)
+}
+
+func nonEmpty(parts []string) []string {
+	out := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m *Model) scrollHint() string {
+	if m.follow || m.viewport.AtBottom() {
+		return ""
+	}
+
+	below := m.viewport.TotalLineCount() - m.viewport.YOffset() - m.viewport.Height()
+	if below <= 0 {
+		return ""
+	}
+	return m.theme.Hint.Render(fmt.Sprintf("  ↓ %s below · end to follow again",
+		plural(below, "line", "lines")))
+}
+
+func (m *Model) scroll(move func()) {
+	move()
+	m.follow = m.viewport.AtBottom()
 }
 
 func (m *Model) status() string {
@@ -202,9 +256,6 @@ func (m *Model) status() string {
 	return m.theme.Status.Render("  " + strings.Join(fields, " · "))
 }
 
-// suggestions returns the commands the popup is offering, and where the
-// highlight sits within them. The cursor is clamped here rather than on every
-// keystroke, so shrinking the list as you type can never leave it out of range.
 func (m *Model) suggestions() ([]command, int) {
 	matches := matchCommands(m.input.Value())
 	if len(matches) == 0 {
@@ -242,10 +293,7 @@ func (m *Model) resize(width, height int) {
 
 	m.input.SetWidth(width - 2)
 	m.glamour = newGlamour(m.dark, max(width-4, 20))
-
-	const chrome = 9
 	m.viewport.SetWidth(width)
-	m.viewport.SetHeight(max(height-chrome, 3))
 
 	m.refresh()
 }
@@ -268,7 +316,9 @@ func (m *Model) refresh() {
 	}
 
 	m.viewport.SetContent(strings.Join(blocks, "\n\n"))
-	m.viewport.GotoBottom()
+	if m.follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *Model) appendText(text string) {

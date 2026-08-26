@@ -39,6 +39,7 @@ func Run(ctx context.Context, d Deps) error {
 		events:           make(chan tea.Msg, 64),
 		theme:            darkTheme(),
 		dark:             true,
+		follow:           true,
 		width:            80,
 		height:           24,
 		sessionApprovals: map[string]bool{},

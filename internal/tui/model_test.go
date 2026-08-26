@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/ritik6559/cinch/internal/agent"
 	"github.com/ritik6559/cinch/internal/approval"
@@ -27,6 +29,7 @@ func testModel(t *testing.T) *Model {
 		events:           make(chan tea.Msg, 64),
 		theme:            darkTheme(),
 		dark:             true,
+		follow:           true,
 		sessionApprovals: map[string]bool{},
 	}
 	m.viewport = viewport.New()
@@ -34,8 +37,18 @@ func testModel(t *testing.T) *Model {
 	m.agent = agent.New(nil, nil, nil, agent.Hooks{})
 	m.agent.SetModel("gpt-5.6")
 	m.resize(100, 30)
+	m.View() // the viewport height is decided in View, so settle it once
 
 	return m
+}
+
+// fill puts more lines in the conversation than the viewport can show.
+func fill(m *Model, lines int) {
+	for i := range lines {
+		m.entries = append(m.entries, entry{kind: entryNotice, text: fmt.Sprintf("line %d", i)})
+	}
+	m.refresh()
+	m.View()
 }
 
 func press(t *testing.T, m *Model, keys ...string) {
@@ -66,6 +79,10 @@ func keyCode(t *testing.T, name string) rune {
 		return tea.KeyEnter
 	case "esc":
 		return tea.KeyEscape
+	case "end":
+		return tea.KeyEnd
+	case "home":
+		return tea.KeyHome
 	}
 	t.Fatalf("unknown key %q", name)
 	return 0
@@ -230,6 +247,152 @@ func TestFinishToolWithoutACallStillShows(t *testing.T) {
 
 	if len(m.entries) != 1 || !m.entries[0].failed {
 		t.Fatalf("want one failed tool entry, got %+v", m.entries)
+	}
+}
+
+func TestScrollingUpStopsFollowing(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	if !m.follow || !m.viewport.AtBottom() {
+		t.Fatal("should start pinned to the bottom")
+	}
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.follow {
+		t.Fatal("scrolling up should stop following")
+	}
+
+	// The whole point: streaming output must not yank you back down.
+	before := m.viewport.YOffset()
+	m.appendText("a new answer arriving while you read history")
+	m.View()
+
+	if m.viewport.YOffset() != before {
+		t.Errorf("view jumped from %d to %d while scrolled up", before, m.viewport.YOffset())
+	}
+}
+
+func TestScrollingBackToTheBottomResumesFollowing(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.follow {
+		t.Fatal("setup: should not be following")
+	}
+
+	for range 10 {
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	}
+
+	if !m.follow {
+		t.Error("scrolling back to the bottom should resume following")
+	}
+}
+
+func TestEndReturnsToLive(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	press(t, m, "end")
+
+	if !m.follow || !m.viewport.AtBottom() {
+		t.Error("end should jump back to the newest output")
+	}
+}
+
+// At the bottom, end has nothing to scroll to, so it belongs to the textarea.
+func TestEndEditsTextWhenAlreadyLive(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	m.input.SetValue("hello")
+	m.input.CursorStart()
+	press(t, m, "end")
+
+	if got := m.input.Value(); got != "hello" {
+		t.Fatalf("input = %q, want it untouched", got)
+	}
+	if m.input.LineInfo().ColumnOffset == 0 {
+		t.Error("end should have moved the text cursor, not the viewport")
+	}
+}
+
+func TestSendingAMessageResumesFollowing(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m.input.SetValue("what about this?")
+	m.submit()
+
+	if !m.follow {
+		t.Error("sending a message should pin back to the bottom")
+	}
+}
+
+func TestScrollHintOnlyShowsWhenScrolledUp(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	if got := m.scrollHint(); got != "" {
+		t.Errorf("hint = %q, want nothing while following", got)
+	}
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m.View()
+
+	if !strings.Contains(m.scrollHint(), "below") {
+		t.Errorf("hint = %q, want a count of lines below", m.scrollHint())
+	}
+}
+
+// The viewport is sized from the real chrome, so a tall approval diff must not
+// push the input off the bottom of the screen.
+func TestLayoutFitsTheTerminal(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	tests := []struct {
+		name  string
+		setup func()
+	}{
+		{"idle", func() { m.mode = modeIdle }},
+		{"popup open", func() { m.mode = modeIdle; m.input.SetValue("/") }},
+		{"working", func() { m.mode = modeWorking; m.input.SetValue("") }},
+		{"picker", func() {
+			m.mode = modePicking
+			m.picker = newPicker("Model", []string{"a", "b", "c", "d"}, "a")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setup()
+			height := lipgloss.Height(m.View().Content)
+
+			if height > m.height {
+				t.Errorf("rendered %d rows into a %d row terminal", height, m.height)
+			}
+			if m.viewport.Height() < minViewport {
+				t.Errorf("viewport collapsed to %d rows", m.viewport.Height())
+			}
+		})
+	}
+}
+
+func TestLayoutSurvivesATinyTerminal(t *testing.T) {
+	m := testModel(t)
+	fill(m, 200)
+
+	m.resize(40, 6) // shorter than the input box alone
+	if got := m.View().Content; got == "" {
+		t.Fatal("View() was empty")
+	}
+	if m.viewport.Height() < minViewport {
+		t.Errorf("viewport = %d rows, want at least %d", m.viewport.Height(), minViewport)
 	}
 }
 

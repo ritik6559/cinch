@@ -151,8 +151,23 @@ session, so resuming it reports what it actually used.
 | Esc | Cancel the turn, or dismiss a picker |
 | Ctrl-C | Cancel the turn; again at an empty prompt quits |
 | Ctrl-D | Quit |
-| PgUp / PgDn | Scroll the conversation |
 | Tab | Complete a command |
+
+Scrolling the conversation:
+
+| Key | Meaning |
+|---|---|
+| Mouse wheel | Scroll |
+| PgUp / PgDn | Half a page |
+| Shift-↑ / Shift-↓ | One line |
+| End | Jump back to the newest output |
+
+Scrolling up **stops the view following new output**, so a reply streaming in
+cannot drag you away from what you are reading. A hint appears showing how many
+lines are below you; `End` or scrolling back to the bottom resumes following.
+
+Plain ↑/↓ belong to the prompt box, and `End` only scrolls when you are already
+scrolled up — at the bottom it moves the text cursor as usual.
 
 ## Tools
 

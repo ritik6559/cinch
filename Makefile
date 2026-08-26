@@ -1,6 +1,14 @@
 MODULE := github.com/ritik6559/cinch
 BINARY := bin/cinch$(shell go env GOEXE)
 
+# Windows make picks cmd.exe unless it can find a POSIX shell on PATH. From Git
+# Bash it finds one; from PowerShell it does not, and every /dev/null and `test`
+# below fails. Git Bash is already required for the bash tool, so name it.
+ifeq ($(OS),Windows_NT)
+  SHELL := bash.exe
+  .SHELLFLAGS := -c
+endif
+
 # ?= means "only if not already set", so you can override from the command line:
 #   make build VERSION=1.0.0
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
