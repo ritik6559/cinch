@@ -39,6 +39,7 @@ type Env struct {
 	Debug    bool
 	Continue bool
 	Resume   string
+	NoTUI    bool
 }
 
 type Command struct {
@@ -77,6 +78,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		cwd         string
 		resume      string
 		cont        bool
+		noTUI       bool
 	)
 
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
@@ -86,6 +88,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	fs.StringVar(&resume, "resume", "", "resume a saved session by id")
 	fs.BoolVar(&cont, "continue", false, "resume the most recent session")
 	fs.BoolVar(&cont, "c", false, "resume the most recent session")
+	fs.BoolVar(&noTUI, "no-tui", false, "use the plain prompt instead of the full interface")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -102,6 +105,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		Debug:    debug,
 		Continue: cont,
 		Resume:   resume,
+		NoTUI:    noTUI,
 	}
 
 	if cwd != "" {
@@ -220,6 +224,7 @@ Flags:
   -v, --version    print version and exit
       --debug      print extra information
       --cwd dir    run as if cinch started in this directory
+      --no-tui     use the plain prompt instead of the full interface
   -h, --help       show this help
 
 Flags must come before the command name.

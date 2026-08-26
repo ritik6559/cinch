@@ -4,13 +4,13 @@ A coding agent that runs in your terminal. It reads, searches and edits files in
 the directory you start it from, runs commands to check its own work, and asks
 before it changes anything.
 
-cinch is a single Go binary with one dependency. It talks to the OpenAI
-Responses API in stateless mode, which means OpenAI stores nothing: cinch keeps
-the whole conversation itself, and can save and resume it.
+cinch is a single Go binary. It talks to the OpenAI Responses API in stateless
+mode, which means OpenAI stores nothing: cinch keeps the whole conversation
+itself, and can save and resume it.
 
 > Early work in progress. The agent loop, the tools, approval, streaming,
-> sessions and compaction all work. There is no full terminal interface yet, no
-> sandbox, and no subagents.
+> sessions, compaction and the terminal interface all work. There is no sandbox
+> and there are no subagents.
 
 ## Requirements
 
@@ -46,6 +46,8 @@ cp .env.example .env
 | `CINCH_PROVIDER` | `openai` | `openai` or `openai-compatible` |
 | `CINCH_BASE_URL` | — | Address of an OpenAI-compatible Responses API |
 | `CINCH_COMPACT_AT` | `100000` | Token count that triggers compaction. `0` disables it |
+| `CINCH_EFFORT` | — | How hard the model thinks: `none`…`max`. Unset lets the API decide |
+| `CINCH_NO_TUI` | — | Set to anything to use the plain line prompt |
 
 Real environment variables win over `.env`, so this also works:
 
@@ -65,21 +67,35 @@ Run `cinch` inside the project you want to work on. The directory you start in
 becomes the workspace.
 
 ```
-$ cinch
-cinch — ask about the files in this directory. ctrl-c to quit.
+› where is the step limit defined?
 
-you: where is the step limit defined?
- -> grep "maxSteps"
+⏺ grep maxSteps
+  ⎿ 3 matches
 
-cinch: internal/agent/agent.go:14 defines it as 25.
+internal/agent/agent.go:14 defines it as 25.
 
-you: raise it to 40 and run the tests
+› raise it to 40 and run the tests
 
-allow edit file internal/agent/agent.go: replace "maxSteps = 25" with "maxSteps = 40"? [y/N/a] y
-allow run: go test ./internal/agent/? [y/N/a] y
+  edit_file  internal/agent/agent.go
+  - maxSteps = 25
+  + maxSteps = 40
 
-cinch: Changed it at internal/agent/agent.go:14. Tests pass.
+  Allow?  y yes · n no · a this session · s always
+
+✻ Cerebrating… (12s · ↑ 1.2k tokens · esc to interrupt)
 ```
+
+The status line under the conversation shows the model, the reasoning effort,
+how much context the session is using, and the workspace name.
+
+When stdin is not a terminal, cinch drops to a plain line prompt instead, so
+pipes and scripts keep working:
+
+```bash
+printf 'what does this package do?\n' | cinch
+```
+
+`--no-tui` forces the plain prompt in a terminal too.
 
 ### Commands
 
@@ -104,16 +120,39 @@ Flags must come before the command name.
 | `-v`, `--version` | Print version and exit |
 | `--debug` | Print extra information |
 | `--cwd dir` | Run as if cinch started in `dir` |
+| `--no-tui` | Use the plain line prompt |
 | `-h`, `--help` | Show help |
 
 ### While chatting
 
-| | |
+Type `/` to see the commands. The list filters as you keep typing, Tab
+completes, and ↑/↓ then Enter picks one.
+
+| Command | Meaning |
 |---|---|
+| `/model` | Pick a model from the list the API reports. `/model <id>` sets it directly |
+| `/effort` | Pick how hard the model thinks |
 | `/compact` | Shrink the conversation now |
-| Ctrl-C during a turn | Cancel that turn, keep the session |
-| Ctrl-C at the prompt | Quit |
+| `/sessions` | Pick a saved session to switch to |
+| `/resume <id>` | Resume a session by id |
+| `/approvals` | Review saved approvals, Enter removes one |
+| `/cost` | Token usage for this session |
+| `/clear` | Start a new conversation |
+| `/help` | List the commands |
+| `/quit` | Save and exit |
+
+`/model` and `/effort` take effect on the next turn and are recorded in the
+session, so resuming it reports what it actually used.
+
+| Key | Meaning |
+|---|---|
+| Enter | Send |
+| Shift-Enter | New line |
+| Esc | Cancel the turn, or dismiss a picker |
+| Ctrl-C | Cancel the turn; again at an empty prompt quits |
 | Ctrl-D | Quit |
+| PgUp / PgDn | Scroll the conversation |
+| Tab | Complete a command |
 
 ## Tools
 
@@ -135,8 +174,13 @@ The model can use these, and nothing else:
 is about to happen, and the default answer is no:
 
 ```
-allow run: go test ./...? [y/N/s]
+  bash  go test ./...
+
+  Allow?  y yes · n no · s always
 ```
+
+For `edit_file` the prompt shows the actual diff, so you can see the change
+rather than a one-line description of it.
 
 | Answer | Meaning |
 |---|---|

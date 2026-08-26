@@ -21,6 +21,7 @@ import (
 	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/tools"
+	"github.com/ritik6559/cinch/internal/tui"
 )
 
 func chatCmd() *Command {
@@ -33,6 +34,71 @@ func chatCmd() *Command {
 }
 
 func runChat(ctx context.Context, env *Env, args []string) error {
+	// chat takes no arguments. Saying so beats silently ignoring a typo like
+	// `cinch chat --resmue abc`, which would otherwise start a fresh session.
+	if len(args) > 0 {
+		return usagef("chat takes no arguments, got %q. Flags go before the command name", args[0])
+	}
+
+	if env.NoTUI || os.Getenv("CINCH_NO_TUI") != "" || !interactive(env) {
+		return runREPL(ctx, env)
+	}
+	return runTUI(ctx, env)
+}
+
+func interactive(env *Env) bool {
+	f, ok := env.Stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func runTUI(ctx context.Context, env *Env) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	p, err := provider.New(cfg)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	root, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	ts, err := tools.New(root)
+	if err != nil {
+		return err
+	}
+
+	sess, err := openSession(env, cfg, root)
+	if err != nil {
+		return err
+	}
+
+	system := agent.DefaultSystemPrompt
+	if instructions, err := projectctx.Load(root); err == nil && instructions != "" {
+		system = projectctx.Wrap(system, instructions)
+	}
+
+	return tui.Run(ctx, tui.Deps{
+		Provider: p,
+		Tools:    ts,
+		Config:   cfg,
+		Session:  sess,
+		Root:     root,
+		System:   system,
+	})
+}
+
+func runREPL(ctx context.Context, env *Env) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -200,7 +266,7 @@ type interrupter struct {
 	done    chan struct{}
 
 	mu     sync.Mutex
-	cancel context.CancelFunc 
+	cancel context.CancelFunc
 }
 
 func newInterrupter(env *Env) *interrupter {

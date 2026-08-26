@@ -48,3 +48,7 @@ type Provider interface {
 	Name() string
 	Complete(ctx context.Context, req Request, onText func(string)) (*Response, error)
 }
+
+type ModelLister interface {
+	Models(ctx context.Context) ([]string, error)
+}
