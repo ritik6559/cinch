@@ -209,6 +209,23 @@ command. `go test ./internal/agent` saves as `go test`, so it covers the next
 run with different arguments — but approving `go test` never approves `rm`.
 The prefix ends at a word boundary, so `go test` does not match `go testify`.
 
+A saved prefix describes **one** command. Before matching, the line is split on
+`;`, `&&`, `||`, `|` and `&`, and every part must be covered by some rule:
+
+```
+saved: go test
+
+go test ./...              allowed
+go build && go test        allowed only if `go build` is saved too
+go test && rm -rf ~        asks
+go test > ~/.bashrc        asks
+```
+
+Some lines cannot be described by a prefix at all — command substitution
+(`$(…)`, backticks), `eval`, a nested `bash -c`, an unbalanced quote. Those are
+never matched against saved rules and always ask, and `s` refuses to save them
+rather than storing a rule that would not mean what it says.
+
 ```bash
 cinch approvals                  # see what is saved
 cinch approvals rm "go test"     # take one back
@@ -284,7 +301,11 @@ Type `/compact` to shrink the conversation by hand.
 One limit worth knowing: **`bash` breaks workspace confinement.** `cd ..` works,
 and the path checks do not apply to a shell. Approval is the only control on it,
 which is why saved approvals for `bash` are command prefixes rather than a
-blanket allow.
+blanket allow, and why a prefix only ever covers a single simple command.
+
+Note what the split does **not** do. It decides whether a saved rule applies; it
+is not a security boundary. A command it refuses to read is sent to a human,
+never blocked. Anything you approve runs with your full user permissions.
 
 cinch does not sandbox anything. Run it in a git repository, so you can always
 see and undo what it changed.

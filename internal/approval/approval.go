@@ -112,6 +112,24 @@ func (s *Store) Save() error {
 }
 
 func (s *Store) Allows(tool, command string) bool {
+	if tool != "bash" {
+		return s.matches(tool, command)
+	}
+
+	segments, reason := Split(command)
+	if reason != "" || len(segments) == 0 {
+		return false
+	}
+
+	for _, segment := range segments {
+		if !s.matches(tool, segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) matches(tool, command string) bool {
 	for _, r := range s.Rules {
 		if r.Matches(tool, command) {
 			return true
@@ -146,20 +164,36 @@ func (s *Store) Remove(arg string) int {
 	return removed
 }
 
-func PrefixFor(command string) string {
-	fields := strings.Fields(command)
+func PrefixFor(command string) (prefix string, ok bool) {
+	segments, reason := Split(command)
+	if reason != "" || len(segments) != 1 {
+		return "", false
+	}
+
+	fields := strings.Fields(segments[0])
 	switch len(fields) {
 	case 0:
-		return ""
+		return "", false
 	case 1:
-		return fields[0]
+		return fields[0], true
 	}
 
 	second := fields[1]
 	if strings.HasPrefix(second, "-") || strings.ContainsAny(second, `/\.`) {
-		return fields[0]
+		return fields[0], true
 	}
-	return fields[0] + " " + second
+	return fields[0] + " " + second, true
+}
+
+func WhyUnsafe(command string) string {
+	segments, reason := Split(command)
+	if reason != "" {
+		return reason
+	}
+	if len(segments) > 1 {
+		return "it runs several commands"
+	}
+	return ""
 }
 
 func Describe(tool, prefix string) string {

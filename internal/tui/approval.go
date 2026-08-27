@@ -54,8 +54,6 @@ func (m *Model) approvalPrompt() string {
 
 	options := "  [y] yes   [n] no   [s] save permanently"
 	if m.pending.tool != "bash" {
-		// Blanket shell access for a session is a much larger grant than the
-		// prompt appears to ask for, so bash is not offered it.
 		options = "  [y] yes   [n] no   [a] all this session   [s] save permanently"
 	}
 	fmt.Fprint(&b, m.theme.Hint.Render(options))
@@ -98,7 +96,12 @@ func (m *Model) approvalKey(key tea.KeyPressMsg) tea.Cmd {
 func (m *Model) remember(tool, command string) {
 	prefix := ""
 	if tool == "bash" {
-		prefix = approval.PrefixFor(command)
+		p, ok := approval.PrefixFor(command)
+		if !ok {
+			m.note("allowed once — cannot save a rule because " + approval.WhyUnsafe(command))
+			return
+		}
+		prefix = p
 	}
 
 	if m.saved.Add(tool, prefix) {

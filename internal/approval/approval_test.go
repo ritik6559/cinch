@@ -76,13 +76,43 @@ func TestPrefixFor(t *testing.T) {
 		"cat internal/agent.go": "cat",
 		"./scripts/deploy.sh":   "./scripts/deploy.sh",
 		"go":                    "go",
-		"":                      "",
 		"  go   test   ./...  ": "go test",
 	}
 
 	for command, want := range cases {
-		if got := PrefixFor(command); got != want {
+		got, ok := PrefixFor(command)
+		if !ok {
+			t.Errorf("PrefixFor(%q) refused, want %q", command, want)
+			continue
+		}
+		if got != want {
 			t.Errorf("PrefixFor(%q) = %q, want %q", command, got, want)
+		}
+	}
+}
+
+func TestPrefixForRefusesWhatItCannotDescribe(t *testing.T) {
+	for _, command := range []string{
+		"",
+		"   ",
+		"go test && rm -rf ~",
+		"go test; make",
+		"go test | tee log",
+		"go build $(cat args)",
+		"eval \"$PAYLOAD\"",
+		"bash -c 'anything'",
+		"echo hi > ~/.bashrc",
+		`echo "unbalanced`,
+	} {
+		prefix, ok := PrefixFor(command)
+		if ok {
+			t.Errorf("PrefixFor(%q) = %q, want a refusal", command, prefix)
+		}
+		if prefix != "" {
+			t.Errorf("PrefixFor(%q) returned %q alongside the refusal", command, prefix)
+		}
+		if WhyUnsafe(command) == "" && command != "" && strings.TrimSpace(command) != "" {
+			t.Errorf("PrefixFor(%q) refused without a reason", command)
 		}
 	}
 }

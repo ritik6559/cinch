@@ -34,8 +34,6 @@ func chatCmd() *Command {
 }
 
 func runChat(ctx context.Context, env *Env, args []string) error {
-	// chat takes no arguments. Saying so beats silently ignoring a typo like
-	// `cinch chat --resmue abc`, which would otherwise start a fresh session.
 	if len(args) > 0 {
 		return usagef("chat takes no arguments, got %q. Flags go before the command name", args[0])
 	}
@@ -437,7 +435,13 @@ func approver(env *Env, scanner *bufio.Scanner, saved *approval.Store) agent.App
 func remember(env *Env, saved *approval.Store, tool, command string) {
 	prefix := ""
 	if tool == "bash" {
-		prefix = approval.PrefixFor(command)
+		p, ok := approval.PrefixFor(command)
+		if !ok {
+			fmt.Fprintf(env.Stdout, "  allowed once — cannot save a rule because %s\n",
+				approval.WhyUnsafe(command))
+			return
+		}
+		prefix = p
 	}
 
 	if saved.Add(tool, prefix) {
