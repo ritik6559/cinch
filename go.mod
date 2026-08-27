@@ -8,6 +8,7 @@ require (
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/joho/godotenv v1.5.1
+	github.com/landlock-lsm/go-landlock v0.10.0
 )
 
 require (
@@ -37,4 +38,5 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )

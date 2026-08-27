@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ritik6559/cinch/internal/sandbox"
 )
 
 const (
@@ -116,7 +118,7 @@ func (s *Store) Allows(tool, command string) bool {
 		return s.matches(tool, command)
 	}
 
-	segments, reason := Split(command)
+	segments, reason := sandbox.Split(command)
 	if reason != "" || len(segments) == 0 {
 		return false
 	}
@@ -165,7 +167,7 @@ func (s *Store) Remove(arg string) int {
 }
 
 func PrefixFor(command string) (prefix string, ok bool) {
-	segments, reason := Split(command)
+	segments, reason := sandbox.Split(command)
 	if reason != "" || len(segments) != 1 {
 		return "", false
 	}
@@ -186,7 +188,7 @@ func PrefixFor(command string) (prefix string, ok bool) {
 }
 
 func WhyUnsafe(command string) string {
-	segments, reason := Split(command)
+	segments, reason := sandbox.Split(command)
 	if reason != "" {
 		return reason
 	}

@@ -61,6 +61,7 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	m.agent.SetModel(d.Config.Model)
 	m.agent.SetEffort(d.Config.Effort)
+	m.agent.SetSandbox(d.Config.Sandbox)
 
 	if len(d.Session.Messages) > 0 {
 		m.agent.Restore(d.Session.Messages, d.Session.Usage)

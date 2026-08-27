@@ -13,8 +13,6 @@ import (
 	"github.com/ritik6559/cinch/internal/tools"
 )
 
-// fakeProvider returns scripted responses instead of calling a model, and
-// records the requests it was given so a test can inspect what the agent sent.
 type fakeProvider struct {
 	responses []llm.Response
 	calls     int
@@ -92,7 +90,7 @@ func TestDeniedToolStillProducesAResult(t *testing.T) {
 		assistantText("understood"),
 	}}
 
-	denyAll := func(tool, summary, arguments string) bool { return false }
+	denyAll := func(ApprovalRequest) bool { return false }
 	a, _ := newTestAgent(t, provider, denyAll)
 
 	if err := a.Run(context.Background(), "write a file"); err != nil {
@@ -127,7 +125,7 @@ func TestApprovedToolRuns(t *testing.T) {
 		assistantText("written"),
 	}}
 
-	allowAll := func(tool, summary, arguments string) bool { return true }
+	allowAll := func(ApprovalRequest) bool { return true }
 	a, _ := newTestAgent(t, provider, allowAll)
 
 	if err := a.Run(context.Background(), "write a file"); err != nil {

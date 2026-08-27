@@ -1,12 +1,12 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"charm.land/bubbletea/v2"
 
+	"github.com/ritik6559/cinch/internal/agent"
 	"github.com/ritik6559/cinch/internal/approval"
 	"github.com/ritik6559/cinch/internal/tools"
 )
@@ -15,19 +15,20 @@ type approvalReq struct {
 	tool      string
 	summary   string
 	arguments string
+	reason    string
 	reply     chan bool
 }
 
-func (m *Model) approver() func(tool, summary, arguments string) bool {
-	return func(tool, summary, arguments string) bool {
-		command := tools.CommandOf(arguments)
+func (m *Model) approver() agent.Approver {
+	return func(r agent.ApprovalRequest) bool {
+		command := tools.CommandOf(r.Arguments)
 
-		if m.sessionApprovals[tool] || m.saved.Allows(tool, command) {
+		if m.sessionApprovals[r.Tool] || m.saved.Allows(r.Tool, command) {
 			return true
 		}
 
 		req := &approvalReq{
-			tool: tool, summary: summary, arguments: arguments,
+			tool: r.Tool, summary: r.Summary, arguments: r.Arguments, reason: r.Reason,
 			reply: make(chan bool, 1),
 		}
 		m.events <- req
@@ -45,6 +46,10 @@ func (m *Model) approvalPrompt() string {
 	var b strings.Builder
 
 	fmt.Fprintln(&b, m.theme.Prompt.Render("  allow ")+m.theme.CmdName.Render(m.pending.summary)+"?")
+
+	if m.pending.reason != "" {
+		fmt.Fprintln(&b, m.theme.ToolFail.Render("  ⚠ "+m.pending.reason))
+	}
 
 	if m.pending.tool == "edit_file" {
 		if d := m.diff(m.pending.arguments); d != "" {
@@ -112,7 +117,3 @@ func (m *Model) remember(tool, command string) {
 	}
 	m.note("saved: " + approval.Describe(tool, prefix))
 }
-
-var _ = func(m *Model) func(string, string, string) bool { return m.approver() }
-
-var _ = context.Background

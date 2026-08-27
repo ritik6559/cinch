@@ -19,6 +19,7 @@ import (
 	"github.com/ritik6559/cinch/internal/llm"
 	"github.com/ritik6559/cinch/internal/projectctx"
 	"github.com/ritik6559/cinch/internal/provider"
+	"github.com/ritik6559/cinch/internal/sandbox"
 	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/tools"
 	"github.com/ritik6559/cinch/internal/tui"
@@ -75,6 +76,9 @@ func runTUI(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
+	if err := confine(cfg, ts.Root()); err != nil {
+		return err
+	}
 
 	sess, err := openSession(env, cfg, root)
 	if err != nil {
@@ -94,6 +98,17 @@ func runTUI(ctx context.Context, env *Env) error {
 		Root:     root,
 		System:   system,
 	})
+}
+
+// confine applies kernel enforcement when the mode asks for it. A mode this
+// machine cannot honour is an error rather than a warning: someone who set
+// `confined` and silently got nothing would be worse off than someone who set
+// nothing at all, because they would believe they were protected.
+func confine(cfg config.Config, root string) error {
+	if !cfg.Sandbox.Confines() {
+		return nil
+	}
+	return sandbox.Confine(root)
 }
 
 func runREPL(ctx context.Context, env *Env) error {
@@ -118,6 +133,9 @@ func runREPL(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
+	if err := confine(cfg, ts.Root()); err != nil {
+		return err
+	}
 
 	sess, err := openSession(env, cfg, root)
 	if err != nil {
@@ -138,6 +156,7 @@ func runREPL(ctx context.Context, env *Env) error {
 	a := agent.New(p, ts, approve, printer.hooks())
 	a.SetModel(cfg.Model)
 	a.SetEffort(cfg.Effort)
+	a.SetSandbox(cfg.Sandbox)
 	deps := compactDeps{agent: a, session: sess, provider: p, limit: cfg.CompactAt}
 	if len(sess.Messages) > 0 {
 		a.Restore(sess.Messages, sess.Usage)
@@ -393,8 +412,9 @@ func comma(n int) string {
 func approver(env *Env, scanner *bufio.Scanner, saved *approval.Store) agent.Approver {
 	session := map[string]bool{}
 
-	return func(tool, summary, arguments string) bool {
-		command := tools.CommandOf(arguments)
+	return func(r agent.ApprovalRequest) bool {
+		tool := r.Tool
+		command := tools.CommandOf(r.Arguments)
 
 		if session[tool] || saved.Allows(tool, command) {
 			return true
@@ -404,7 +424,10 @@ func approver(env *Env, scanner *bufio.Scanner, saved *approval.Store) agent.App
 		if tool == "bash" {
 			answers = "[y/N/s]"
 		}
-		fmt.Fprintf(env.Stdout, "\nallow %s? %s ", summary, answers)
+		if r.Reason != "" {
+			fmt.Fprintf(env.Stdout, "\n  warning: %s", r.Reason)
+		}
+		fmt.Fprintf(env.Stdout, "\nallow %s? %s ", r.Summary, answers)
 
 		if !scanner.Scan() {
 			return false

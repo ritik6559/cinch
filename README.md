@@ -9,8 +9,9 @@ mode, which means OpenAI stores nothing: cinch keeps the whole conversation
 itself, and can save and resume it.
 
 > Early work in progress. The agent loop, the tools, approval, streaming,
-> sessions, compaction and the terminal interface all work. There is no sandbox
-> and there are no subagents.
+> sessions, compaction and the terminal interface all work. Shell commands are
+> judged before they run, and on Linux they can be confined by the kernel.
+> There are no subagents yet.
 
 ## Requirements
 
@@ -47,6 +48,7 @@ cp .env.example .env
 | `CINCH_BASE_URL` | — | Address of an OpenAI-compatible Responses API |
 | `CINCH_COMPACT_AT` | `100000` | Token count that triggers compaction. `0` disables it |
 | `CINCH_EFFORT` | — | How hard the model thinks: `none`…`max`. Unset lets the API decide |
+| `CINCH_SANDBOX` | `policy` | How `bash` is judged: `off`, `policy`, `strict` or `confined` |
 | `CINCH_NO_TUI` | — | Set to anything to use the plain line prompt |
 
 Real environment variables win over `.env`, so this also works:
@@ -181,12 +183,46 @@ The model can use these, and nothing else:
 | `glob` | no | Find files by **name**, with `*`, `**` and `?` |
 | `write_file` | yes | Create a file or replace it completely |
 | `edit_file` | yes | Replace an exact string in a file |
-| `bash` | yes | Run a shell command and return its output and exit status |
+| `bash` | depends | Run a shell command. See [Approvals](#approvals) |
 
 ## Approvals
 
-`write_file`, `edit_file` and `bash` ask before they run. The prompt shows what
-is about to happen, and the default answer is no:
+`write_file` and `edit_file` always ask. `bash` is judged first, and what
+happens next depends on what the command does:
+
+| | |
+|---|---|
+| **Runs** | Reading inside the workspace: `ls`, `cat go.mod`, `git status`, `grep -rn x internal` |
+| **Asks** | Anything with effects, anything reaching the network, anything reading or writing outside the workspace |
+| **Refused** | `rm -rf /`, `mkfs`, `dd of=/dev/…`, `shutdown`, fork bombs, `curl … \| sh` |
+
+A refused command never reaches the shell, and answering the prompt is not
+offered — the model is told why and asked to suggest something else.
+
+When cinch asks, it says what it noticed:
+
+```
+  warning: curl reaches the network
+allow run: curl -s https://example.com? [y/N/s]
+```
+
+The judgement is a filter on accidents, **not a security boundary**. A command
+it cannot read — command substitution, `eval`, a nested `bash -c` — is escalated
+to you rather than allowed, but nothing stops a command you approve.
+
+`CINCH_SANDBOX` chooses how much of this applies:
+
+| Mode | Meaning |
+|---|---|
+| `off` | No judgement. `bash` asks every time and nothing is refused |
+| `policy` | The default, as above |
+| `strict` | The same refusals, but reads ask too |
+| `confined` | `policy`, plus the kernel enforces the workspace. **Linux only** |
+
+`confined` is the only one that is a real boundary — see
+[Confinement](#confinement).
+
+The prompt shows what is about to happen, and the default answer is no:
 
 ```
   bash  go test ./...
@@ -298,17 +334,54 @@ Type `/compact` to shrink the conversation by hand.
 - **Step limit.** One request runs at most 25 model turns, so a confused model
   cannot loop forever.
 
-One limit worth knowing: **`bash` breaks workspace confinement.** `cd ..` works,
-and the path checks do not apply to a shell. Approval is the only control on it,
-which is why saved approvals for `bash` are command prefixes rather than a
-blanket allow, and why a prefix only ever covers a single simple command.
+One limit worth knowing: **unless you run `confined`, `bash` breaks workspace
+confinement.** `cd ..` works, and the path checks do not apply to a shell.
+Approval is the only control on it, which is why saved approvals for `bash` are
+command prefixes rather than a blanket allow, and why a prefix only ever covers
+a single simple command.
 
-Note what the split does **not** do. It decides whether a saved rule applies; it
-is not a security boundary. A command it refuses to read is sent to a human,
-never blocked. Anything you approve runs with your full user permissions.
+Note what judging a command does **not** do. It decides whether to run, ask or
+refuse; it is not a boundary. A command it cannot read is sent to a human rather
+than blocked, and anything you approve runs with your full user permissions.
 
-cinch does not sandbox anything. Run it in a git repository, so you can always
-see and undo what it changed.
+Run cinch in a git repository, so you can always see and undo what it changed.
+
+## Confinement
+
+`CINCH_SANDBOX=confined` adds the part judgement cannot give you: the kernel
+refuses the syscall, so a command **you approved** still cannot leave the
+workspace.
+
+```bash
+CINCH_SANDBOX=confined cinch
+```
+
+This uses [Landlock](https://landlock.io), so it needs **Linux 5.13 or newer**.
+On any other platform cinch refuses to start rather than running unprotected:
+
+```
+cinch: sandbox: kernel confinement is not available on windows
+```
+
+`cinch doctor` reports what is actually enforcing, never what was asked for:
+
+```
+ok    sandbox   confined — commands judged, and landlock (kernel ABI v5) enforcing the workspace
+fail  sandbox   confined was asked for but none (no kernel sandbox on windows)
+```
+
+What stays reachable is wider than you might expect, because a coding agent has
+to be able to build code: the workspace and `/tmp` read-write, the toolchain
+(`/usr`, `/bin`, `/lib`, `/etc`) read-only, and the build caches (`~/.cache`,
+`~/go/pkg`, `~/.cargo`, `~/.npm`, `~/.m2`) read-write.
+
+What it shuts out is the part that matters — **the rest of your home
+directory**. `~/.ssh`, `~/.aws`, `~/.gnupg` and `~/.config` become unreadable to
+cinch and to everything it starts, whatever you approve.
+
+Two things it does not do. It does not restrict the network, and it applies to
+the whole cinch process rather than only the shell — Landlock cannot be undone
+once applied, so it happens once at startup.
 
 ## Development
 

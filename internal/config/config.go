@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/ritik6559/cinch/internal/llm"
+	"github.com/ritik6559/cinch/internal/sandbox"
 )
 
 const (
@@ -29,6 +30,9 @@ type Config struct {
 	// Effort is the reasoning level to ask for. Empty means the request says
 	// nothing and the provider applies its own default.
 	Effort string
+
+	// Sandbox is how much of the shell policy to apply: off, policy or strict.
+	Sandbox sandbox.Mode
 }
 
 func Load() (Config, error) {
@@ -61,6 +65,15 @@ func Load() (Config, error) {
 			strings.Join(llm.Efforts, ", "), effort)
 	}
 
+	box := sandbox.ModePolicy
+	if v := os.Getenv("CINCH_SANDBOX"); v != "" {
+		if !sandbox.ValidMode(v) {
+			return Config{}, fmt.Errorf("CINCH_SANDBOX must be one of %s, got %q",
+				strings.Join(sandbox.Modes, ", "), v)
+		}
+		box = sandbox.Mode(v)
+	}
+
 	return Config{
 		Provider:  provider,
 		APIKey:    firstEnv(KeyEnvFor(provider), "CINCH_API_KEY"),
@@ -68,6 +81,7 @@ func Load() (Config, error) {
 		BaseURL:   os.Getenv("CINCH_BASE_URL"),
 		CompactAt: compactAt,
 		Effort:    effort,
+		Sandbox:   box,
 	}, nil
 }
 

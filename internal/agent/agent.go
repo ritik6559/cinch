@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ritik6559/cinch/internal/llm"
+	"github.com/ritik6559/cinch/internal/sandbox"
 	"github.com/ritik6559/cinch/internal/tools"
 )
 
@@ -14,7 +15,14 @@ const maxSteps = 25
 
 var ErrMaxSteps = errors.New("reached step limit")
 
-type Approver func(tool, summary, arguments string) bool
+type ApprovalRequest struct {
+	Tool      string
+	Summary   string
+	Arguments string
+	Reason    string
+}
+
+type Approver func(ApprovalRequest) bool
 
 type Hooks struct {
 	// OnText receives model prose as it streams, a fragment at a time.
@@ -59,6 +67,7 @@ type Agent struct {
 	tools    *tools.Tools
 	approver Approver
 	hooks    Hooks
+	sandbox  sandbox.Mode
 	system   string
 	model    string
 	effort   string
@@ -74,11 +83,20 @@ func New(provider llm.Provider, tls *tools.Tools, approver Approver, hooks Hooks
 		tools:    tls,
 		approver: approver,
 		hooks:    hooks,
+		sandbox:  sandbox.ModePolicy,
 		system:   DefaultSystemPrompt,
 	}
 }
 
 func (a *Agent) SetSystemPrompt(s string) { a.system = s }
+
+func (a *Agent) SetSandbox(m sandbox.Mode) {
+	if m != "" {
+		a.sandbox = m
+	}
+}
+
+func (a *Agent) Sandbox() sandbox.Mode { return a.sandbox }
 
 func (a *Agent) SetModel(m string) { a.model = m }
 
@@ -164,9 +182,23 @@ func (a *Agent) answerAbandonedCalls() {
 
 func (a *Agent) execute(ctx context.Context, call llm.ToolUse) llm.ToolResult {
 	summary := tools.Summary(call.Name, string(call.Input))
+	verdict := a.judge(call)
 
-	if a.approver != nil && a.tools.NeedsApproval(call.Name) {
-		if !a.approver(call.Name, summary, string(call.Input)) {
+	if verdict.Action == sandbox.Deny {
+		refusal := "refused: " + verdict.Reason + ". " +
+			"This was not run and asking again will not change that. " +
+			"Say what you were trying to achieve and suggest a safer way."
+
+		a.hooks.toolResult(call.Name, refusal, true)
+		return llm.ToolResult{ToolUseID: call.ID, Content: refusal, IsError: true}
+	}
+
+	if verdict.Action == sandbox.Ask && a.approver != nil {
+		req := ApprovalRequest{
+			Tool: call.Name, Summary: summary,
+			Arguments: string(call.Input), Reason: verdict.Reason,
+		}
+		if !a.approver(req) {
 			const denied = "denied: the user rejected this tool call. " +
 				"Do not retry it — explain what you were going to do and ask how to proceed."
 
@@ -181,4 +213,14 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolUse) llm.ToolResult {
 	a.hooks.toolResult(call.Name, result, strings.HasPrefix(result, "error:"))
 
 	return llm.ToolResult{ToolUseID: call.ID, Content: result}
+}
+
+func (a *Agent) judge(call llm.ToolUse) sandbox.Verdict {
+	if call.Name != "bash" {
+		if a.tools.NeedsApproval(call.Name) {
+			return sandbox.Verdict{Action: sandbox.Ask}
+		}
+		return sandbox.Verdict{Action: sandbox.Allow}
+	}
+	return a.sandbox.Decide(tools.CommandOf(string(call.Input)))
 }

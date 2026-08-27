@@ -1,4 +1,4 @@
-package approval
+package sandbox
 
 import (
 	"path/filepath"
@@ -15,7 +15,7 @@ func Split(command string) (segments []string, reason string) {
 	var (
 		out   []string
 		cur   strings.Builder
-		quote byte 
+		quote byte
 	)
 
 	note := func(what string) {

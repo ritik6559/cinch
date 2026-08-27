@@ -12,6 +12,7 @@ import (
 	"github.com/ritik6559/cinch/internal/config"
 	"github.com/ritik6559/cinch/internal/projectctx"
 	"github.com/ritik6559/cinch/internal/provider"
+	"github.com/ritik6559/cinch/internal/sandbox"
 	"github.com/ritik6559/cinch/internal/session"
 	"github.com/ritik6559/cinch/internal/version"
 )
@@ -114,7 +115,27 @@ func configChecks() []check {
 		out = append(out, check{"api key", pass, "set (value hidden)"})
 	}
 
-	return append(out, check{"model", pass, cfg.Model})
+	return append(out, check{"model", pass, cfg.Model}, sandboxCheck(cfg))
+}
+
+func sandboxCheck(cfg config.Config) check {
+	support, available := sandbox.Support()
+
+	switch cfg.Sandbox {
+	case sandbox.ModeOff:
+		return check{"sandbox", warn, "off — every bash command asks and nothing is refused"}
+
+	case sandbox.ModeConfined:
+		if !available {
+			return check{"sandbox", fail, "confined was asked for but " + support}
+		}
+		return check{"sandbox", pass, "confined — commands judged, and " + support + " enforcing the workspace"}
+
+	case sandbox.ModeStrict:
+		return check{"sandbox", pass, "strict — everything asks; kernel enforcement " + support}
+	}
+
+	return check{"sandbox", pass, "policy — commands judged; kernel enforcement " + support}
 }
 
 func sessionCheck() check {
