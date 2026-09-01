@@ -16,21 +16,21 @@ import (
 )
 
 const (
-	DirName = "skills"
-	FileName = "SKILL.md"
-	maxBody        = 32 * 1024 
-	maxDescription = 300      
+	DirName        = "skills"
+	FileName       = "SKILL.md"
+	maxBody        = 32 * 1024
+	maxDescription = 300
 )
 
 type Skill struct {
 	Name        string
 	Description string
-	Path string
-	Dir  string
+	Path        string
+	Dir         string
 }
 
 type Catalog struct {
-	Skills []Skill
+	Skills   []Skill
 	Problems []string
 }
 
@@ -50,7 +50,7 @@ func Load(root string) Catalog {
 	for _, dir := range Dirs(root) {
 		entries, err := os.ReadDir(dir)
 		if errors.Is(err, fs.ErrNotExist) {
-			continue 
+			continue
 		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", dir, err))
@@ -65,7 +65,7 @@ func Load(root string) Catalog {
 			path := filepath.Join(dir, entry.Name(), FileName)
 			skill, err := read(path, entry.Name())
 			if errors.Is(err, fs.ErrNotExist) {
-				continue 
+				continue
 			}
 			if err != nil {
 				problems = append(problems, err.Error())
@@ -125,7 +125,7 @@ func read(path, fallbackName string) (Skill, error) {
 }
 
 func split(text string) (frontMatter, string, error) {
-	text = strings.TrimPrefix(text, string(rune(0xFEFF))) 
+	text = strings.TrimPrefix(text, string(rune(0xFEFF)))
 
 	rest, ok := strings.CutPrefix(strings.TrimLeft(text, "\r\n "), "---")
 	if !ok {
@@ -146,9 +146,9 @@ func split(text string) (frontMatter, string, error) {
 
 	body := rest[end+len("\n---"):]
 	if line := strings.IndexByte(body, '\n'); line >= 0 {
-		body = body[line+1:] 
+		body = body[line+1:]
 	} else {
-		body = "" 
+		body = ""
 	}
 	return meta, strings.TrimSpace(body), nil
 }

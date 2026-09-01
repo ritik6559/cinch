@@ -309,7 +309,7 @@ func TestWrapListsNamesAndDescriptions(t *testing.T) {
 }
 
 func TestTruncateIsRuneSafe(t *testing.T) {
-	long := strings.Repeat("é", maxBody) 
+	long := strings.Repeat("é", maxBody)
 
 	got := truncate(long, "x/SKILL.md")
 	if !strings.Contains(got, "truncated") {
