@@ -40,6 +40,55 @@ Copy the example file and add your key:
 cp .env.example .env
 ```
 
+### Settings for a project
+
+A repository can carry its own settings in `.cinch/config.yaml`, committed
+alongside the code so everyone working on it gets the same behaviour:
+
+```yaml
+# .cinch/config.yaml
+model: gpt-5.6-mini
+effort: high
+compact_at: 60000
+sandbox: confined
+```
+
+The same file works in your home directory, `~/.cinch/config.yaml`, for
+preferences that follow you rather than the project.
+
+Settings are read in layers, each one beating the last:
+
+| | |
+|---|---|
+| built-in defaults | |
+| `~/.cinch/config.yaml` | your own preferences |
+| `<project>/.cinch/config.yaml` | what this repository asks for |
+| `.env` | |
+| the environment | `CINCH_MODEL=… cinch`, for one run |
+
+**A project file is only half-trusted.** It arrived with a repository you may
+never have read, so it may make cinch more careful but never less:
+
+- `sandbox: confined` is accepted — the project is being helpful
+- `sandbox: off` is refused
+- `provider` and `base_url` are refused outright. They decide where your API key
+  is sent, and a repository does not get to answer that
+
+There is no `api_key` field. Keys stay in the environment, where they cannot end
+up in git history.
+
+Run `cinch doctor` to see which files were read — and which settings a variable
+is overriding, which is nearly always the answer to "why is my config being
+ignored":
+
+```
+warn  settings   /home/you/code/app/.cinch/config.yaml — but the environment wins: model overridden by OPENAI_MODEL
+```
+
+### Environment variables
+
+These override every file:
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `OPENAI_API_KEY` | — | Your API key. Required |

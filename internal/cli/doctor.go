@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/ritik6559/cinch/internal/approval"
@@ -107,7 +109,7 @@ func configChecks() []check {
 		return append(out, check{"config", fail, err.Error()})
 	}
 
-	out = append(out, providerCheck(cfg))
+	out = append(out, settingsCheck(), providerCheck(cfg))
 
 	if cfg.APIKey == "" {
 		out = append(out, check{"api key", fail, config.MissingKeyMessage(cfg.Provider)})
@@ -116,6 +118,24 @@ func configChecks() []check {
 	}
 
 	return append(out, check{"model", pass, cfg.Model}, sandboxCheck(cfg))
+}
+
+func settingsCheck() check {
+	root, err := os.Getwd()
+	if err != nil {
+		return check{"settings", warn, err.Error()}
+	}
+
+	found := config.Found(root)
+	if len(found) == 0 {
+		return check{"settings", pass, "environment only — no " +
+			filepath.Join(config.DirName, config.FileName) + " found"}
+	}
+	if shadowed := config.Shadowed(root); len(shadowed) > 0 {
+		return check{"settings", warn, strings.Join(found, ", ") +
+			" — but the environment wins: " + strings.Join(shadowed, ", ")}
+	}
+	return check{"settings", pass, strings.Join(found, ", ")}
 }
 
 func sandboxCheck(cfg config.Config) check {

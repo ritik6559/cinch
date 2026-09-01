@@ -32,3 +32,5 @@ go.work.sum
 .vscode/
 
 .claude
+# .cinch/ is deliberately NOT ignored. It holds this repository's settings and
+# is meant to be committed, so everyone working here gets the same behaviour.

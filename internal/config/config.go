@@ -26,63 +26,95 @@ type Config struct {
 	Model     string
 	BaseURL   string
 	CompactAt int
-
-	// Effort is the reasoning level to ask for. Empty means the request says
-	// nothing and the provider applies its own default.
-	Effort string
-
-	// Sandbox is how much of the shell policy to apply: off, policy or strict.
-	Sandbox sandbox.Mode
+	Effort    string
+	Sandbox   sandbox.Mode
 }
 
 func Load() (Config, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return Config{}, err
+	}
+	return LoadFrom(root)
+}
+
+// LoadFrom builds the configuration in layers, each beating the one before:
+//
+//	built-in defaults
+//	~/.cinch/config.yaml        your own preferences
+//	<root>/.cinch/config.yaml   what this repository asks for
+//	.env
+//	the environment
+//
+// The environment comes last so a single run can override everything without
+// anyone editing a file.
+func LoadFrom(root string) (Config, error) {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Config{}, fmt.Errorf("loading .env: %w", err)
 	}
 
-	provider := os.Getenv("CINCH_PROVIDER")
-	if provider == "" {
-		provider = defaultProvider
+	cfg := Config{
+		Provider:  defaultProvider,
+		Model:     defaultModel,
+		CompactAt: defaultCompactAt,
+		Sandbox:   sandbox.ModePolicy,
 	}
 
-	model := firstEnv("CINCH_MODEL", "OPENAI_MODEL")
-	if model == "" {
-		model = defaultModel
+	for _, src := range Sources(root) {
+		f, err := ReadFile(src.Path)
+		if err != nil {
+			return Config{}, err
+		}
+		if err := f.Apply(&cfg, src.Trust, src.Path); err != nil {
+			return Config{}, err
+		}
 	}
 
-	compactAt := defaultCompactAt
+	if err := applyEnv(&cfg); err != nil {
+		return Config{}, err
+	}
+
+	// Resolved last: which key variable to read depends on the final provider.
+	cfg.APIKey = firstEnv(KeyEnvFor(cfg.Provider), "CINCH_API_KEY")
+	return cfg, nil
+}
+
+func applyEnv(c *Config) error {
+	if v := os.Getenv("CINCH_PROVIDER"); v != "" {
+		c.Provider = v
+	}
+	if v := firstEnv("CINCH_MODEL", "OPENAI_MODEL"); v != "" {
+		c.Model = v
+	}
+	if v := os.Getenv("CINCH_BASE_URL"); v != "" {
+		c.BaseURL = v
+	}
+
 	if v := os.Getenv("CINCH_COMPACT_AT"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return Config{}, fmt.Errorf("CINCH_COMPACT_AT must be a positive number, got %q", v)
+			return fmt.Errorf("CINCH_COMPACT_AT must be a positive number, got %q", v)
 		}
-		compactAt = n
+		c.CompactAt = n
 	}
 
-	effort := os.Getenv("CINCH_EFFORT")
-	if effort != "" && !llm.ValidEffort(effort) {
-		return Config{}, fmt.Errorf("CINCH_EFFORT must be one of %s, got %q",
-			strings.Join(llm.Efforts, ", "), effort)
+	if v := os.Getenv("CINCH_EFFORT"); v != "" {
+		if !llm.ValidEffort(v) {
+			return fmt.Errorf("CINCH_EFFORT must be one of %s, got %q",
+				strings.Join(llm.Efforts, ", "), v)
+		}
+		c.Effort = v
 	}
 
-	box := sandbox.ModePolicy
 	if v := os.Getenv("CINCH_SANDBOX"); v != "" {
 		if !sandbox.ValidMode(v) {
-			return Config{}, fmt.Errorf("CINCH_SANDBOX must be one of %s, got %q",
+			return fmt.Errorf("CINCH_SANDBOX must be one of %s, got %q",
 				strings.Join(sandbox.Modes, ", "), v)
 		}
-		box = sandbox.Mode(v)
+		c.Sandbox = sandbox.Mode(v)
 	}
 
-	return Config{
-		Provider:  provider,
-		APIKey:    firstEnv(KeyEnvFor(provider), "CINCH_API_KEY"),
-		Model:     model,
-		BaseURL:   os.Getenv("CINCH_BASE_URL"),
-		CompactAt: compactAt,
-		Effort:    effort,
-		Sandbox:   box,
-	}, nil
+	return nil
 }
 
 func (c Config) Validate() error {
