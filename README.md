@@ -11,7 +11,7 @@ itself, and can save and resume it.
 > Early work in progress. The agent loop, the tools, approval, streaming,
 > sessions, compaction and the terminal interface all work. Shell commands are
 > judged before they run, and on Linux they can be confined by the kernel.
-> There are no subagents yet.
+> A repository can carry its own settings and skills. There are no subagents yet.
 
 ## Requirements
 
@@ -154,6 +154,7 @@ printf 'what does this package do?\n' | cinch
 |---|---|
 | `cinch` | Start a chat session (same as `cinch chat`) |
 | `cinch sessions` | List saved sessions |
+| `cinch skills` | List the skills available here |
 | `cinch approvals` | List saved approvals |
 | `cinch approvals rm <prefix>` | Take a saved approval back |
 | `cinch doctor` | Check that the local setup is complete |
@@ -230,6 +231,7 @@ The model can use these, and nothing else:
 | `list_files` | no | List one directory |
 | `grep` | no | Search file **contents** with a regular expression |
 | `glob` | no | Find files by **name**, with `*`, `**` and `?` |
+| `skill` | no | Read one of this repository's skills. Only offered when there are some |
 | `write_file` | yes | Create a file or replace it completely |
 | `edit_file` | yes | Replace an exact string in a file |
 | `bash` | depends | Run a shell command. See [Approvals](#approvals) |
@@ -334,6 +336,63 @@ repository that already has one works with no extra setup.
 It is sent on every turn, so keep it short — anything over 32 KB is truncated.
 Project instructions cannot override cinch's own rules about approval or
 workspace confinement.
+
+## Skills
+
+A skill is a set of instructions for one kind of work, kept in the repository:
+
+```
+.cinch/skills/
+  release-notes/SKILL.md
+  deploy/SKILL.md
+```
+
+Each file names itself and says when it applies:
+
+```markdown
+---
+name: release-notes
+description: The format for release notes here. Use when asked to write or review them.
+---
+
+Group entries under Loud and Quiet. End with the release date.
+```
+
+**Only the description is in the prompt.** The body is read when the model
+decides it needs it, by calling the `skill` tool:
+
+```
+› draft release notes for the bug fix
+
+⏺ skill release-notes
+  ⎿ 6 lines
+
+## Loud
+...
+```
+
+That is the whole point. Ten skills cost ten lines of context until one is
+actually used, so a repository can carry a lot of them cheaply.
+
+`AGENTS.md` is still the place for instructions that **always** apply. A skill
+is for instructions that apply *sometimes*, and the description is what teaches
+the model when.
+
+Skills also load from `~/.cinch/skills/`, for ones that follow you rather than
+the project. A project skill wins over a personal one with the same name.
+
+A skill without a description is refused — the model would never learn it
+exists — and descriptions are capped at 300 characters, since that text is sent
+on every single turn. `cinch skills` and `cinch doctor` list what loaded and
+name anything that did not:
+
+```
+warn  skills   1 usable, 1 ignored: .cinch/skills/wip/SKILL.md: no description — the model cannot know when to use it
+```
+
+A skill can only *tell the model to do* something. Anything it induces — an
+edit, a shell command — still goes through approval and the sandbox, so a skill
+grants no new power.
 
 ## Sessions
 

@@ -38,16 +38,6 @@ func Load() (Config, error) {
 	return LoadFrom(root)
 }
 
-// LoadFrom builds the configuration in layers, each beating the one before:
-//
-//	built-in defaults
-//	~/.cinch/config.yaml        your own preferences
-//	<root>/.cinch/config.yaml   what this repository asks for
-//	.env
-//	the environment
-//
-// The environment comes last so a single run can override everything without
-// anyone editing a file.
 func LoadFrom(root string) (Config, error) {
 	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Config{}, fmt.Errorf("loading .env: %w", err)
@@ -74,7 +64,6 @@ func LoadFrom(root string) (Config, error) {
 		return Config{}, err
 	}
 
-	// Resolved last: which key variable to read depends on the final provider.
 	cfg.APIKey = firstEnv(KeyEnvFor(cfg.Provider), "CINCH_API_KEY")
 	return cfg, nil
 }

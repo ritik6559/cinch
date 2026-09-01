@@ -21,6 +21,7 @@ import (
 	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/sandbox"
 	"github.com/ritik6559/cinch/internal/session"
+	"github.com/ritik6559/cinch/internal/skills"
 	"github.com/ritik6559/cinch/internal/tools"
 	"github.com/ritik6559/cinch/internal/tui"
 )
@@ -72,7 +73,12 @@ func runTUI(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
-	ts, err := tools.New(root)
+	catalog := skills.Load(root)
+	for _, problem := range catalog.Problems {
+		fmt.Fprintf(env.Stderr, "warning: skill ignored: %s\n", problem)
+	}
+
+	ts, err := tools.New(root, tools.WithSkills(catalog))
 	if err != nil {
 		return err
 	}
@@ -89,6 +95,7 @@ func runTUI(ctx context.Context, env *Env) error {
 	if instructions, err := projectctx.Load(root); err == nil && instructions != "" {
 		system = projectctx.Wrap(system, instructions)
 	}
+	system = catalog.Wrap(system)
 
 	return tui.Run(ctx, tui.Deps{
 		Provider: p,
@@ -100,10 +107,6 @@ func runTUI(ctx context.Context, env *Env) error {
 	})
 }
 
-// confine applies kernel enforcement when the mode asks for it. A mode this
-// machine cannot honour is an error rather than a warning: someone who set
-// `confined` and silently got nothing would be worse off than someone who set
-// nothing at all, because they would believe they were protected.
 func confine(cfg config.Config, root string) error {
 	if !cfg.Sandbox.Confines() {
 		return nil
@@ -129,7 +132,12 @@ func runREPL(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
-	ts, err := tools.New(root)
+	catalog := skills.Load(root)
+	for _, problem := range catalog.Problems {
+		fmt.Fprintf(env.Stderr, "warning: skill ignored: %s\n", problem)
+	}
+
+	ts, err := tools.New(root, tools.WithSkills(catalog))
 	if err != nil {
 		return err
 	}
@@ -166,10 +174,17 @@ func runREPL(ctx context.Context, env *Env) error {
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "warning: could not read %s: %v\n", projectctx.FileName, err)
 	}
+
+	system := agent.DefaultSystemPrompt
 	if instructions != "" {
-		a.SetSystemPrompt(projectctx.Wrap(agent.DefaultSystemPrompt, instructions))
+		system = projectctx.Wrap(system, instructions)
 		fmt.Fprintf(env.Stdout, "using %s from this repository\n", projectctx.FileName)
 	}
+	if catalog.Len() > 0 {
+		fmt.Fprintf(env.Stdout, "%d skill(s) available: %s\n",
+			catalog.Len(), strings.Join(catalog.Names(), ", "))
+	}
+	a.SetSystemPrompt(catalog.Wrap(system))
 
 	announce(env, sess, root)
 

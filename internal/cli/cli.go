@@ -55,6 +55,7 @@ func commands() []*Command {
 		chatCmd(),
 		doctorCmd(),
 		sessionsCmd(),
+		skillsCmd(),
 		versionCmd(),
 	}
 }
@@ -210,7 +211,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "cinch %s — a coding agent\n\n", version.Short())
 	fmt.Fprint(w, "Usage:\n  cinch [flags] [command]\n\nCommands:\n")
 
-	// tabwriter lines up the second column, whatever the command name length.
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	for _, c := range commands() {
 		fmt.Fprintf(tw, "  %s\t%s\n", c.Name, c.Summary)

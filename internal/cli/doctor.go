@@ -16,6 +16,7 @@ import (
 	"github.com/ritik6559/cinch/internal/provider"
 	"github.com/ritik6559/cinch/internal/sandbox"
 	"github.com/ritik6559/cinch/internal/session"
+	"github.com/ritik6559/cinch/internal/skills"
 	"github.com/ritik6559/cinch/internal/version"
 )
 
@@ -61,6 +62,7 @@ func runDoctor(ctx context.Context, env *Env, args []string) error {
 	checks = append(checks, configChecks()...)
 	checks = append(checks, sessionCheck())
 	checks = append(checks, agentsCheck())
+	checks = append(checks, skillsCheck())
 	checks = append(checks, approvalsCheck())
 	checks = append(checks,
 		binary("bash", "required by the bash tool"),
@@ -136,6 +138,25 @@ func settingsCheck() check {
 			" — but the environment wins: " + strings.Join(shadowed, ", ")}
 	}
 	return check{"settings", pass, strings.Join(found, ", ")}
+}
+
+func skillsCheck() check {
+	root, err := os.Getwd()
+	if err != nil {
+		return check{"skills", warn, err.Error()}
+	}
+
+	catalog := skills.Load(root)
+
+	if len(catalog.Problems) > 0 {
+		return check{"skills", warn, fmt.Sprintf("%d usable, %d ignored: %s",
+			catalog.Len(), len(catalog.Problems), strings.Join(catalog.Problems, "; "))}
+	}
+	if catalog.Len() == 0 {
+		return check{"skills", pass, "none"}
+	}
+	return check{"skills", pass, fmt.Sprintf("%d: %s",
+		catalog.Len(), strings.Join(catalog.Names(), ", "))}
 }
 
 func sandboxCheck(cfg config.Config) check {

@@ -8,15 +8,23 @@ import (
 	"strings"
 
 	"github.com/ritik6559/cinch/internal/llm"
+	"github.com/ritik6559/cinch/internal/skills"
 )
 
 type Tools struct {
-	root string
+	root   string
+	skills skills.Catalog
 }
 
 const maxLineBytes = 1024 * 1024
 
-func New(root string) (*Tools, error) {
+type Option func(*Tools)
+
+func WithSkills(c skills.Catalog) Option {
+	return func(t *Tools) { t.skills = c }
+}
+
+func New(root string, opts ...Option) (*Tools, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -25,7 +33,12 @@ func New(root string) (*Tools, error) {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
 	}
-	return &Tools{root: abs}, nil
+
+	t := &Tools{root: abs}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t, nil
 }
 
 func (t *Tools) Root() string {
@@ -33,7 +46,7 @@ func (t *Tools) Root() string {
 }
 
 func (t *Tools) Definitions() []llm.ToolDef {
-	return []llm.ToolDef{
+	defs := []llm.ToolDef{
 		{
 			Name: "read_file",
 			Description: "Read a text file. Output is line-numbered and capped; if it is truncated the result says so and gives the offset to continue from. " +
@@ -189,10 +202,31 @@ func (t *Tools) Definitions() []llm.ToolDef {
 			},
 		},
 	}
+
+	if t.skills.Len() > 0 {
+		defs = append(defs, llm.ToolDef{
+			Name: "skill",
+			Description: "Read the full instructions for one of this repository's skills. " +
+				"The system prompt lists them with a one-line summary each; use this to get " +
+				"the rest before doing work that skill covers.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "The skill to read.",
+						"enum":        t.skills.Names(),
+					},
+				},
+				"required":             []string{"name"},
+				"additionalProperties": false,
+			},
+		})
+	}
+
+	return defs
 }
 
-// toolArgs is every argument any tool accepts. Each tool reads the fields it
-// needs and ignores the rest.
 type toolArgs struct {
 	Path            string `json:"path"`
 	Dir             string `json:"dir"`
@@ -207,6 +241,7 @@ type toolArgs struct {
 	CaseInsensitive bool   `json:"case_insensitive"`
 	Command         string `json:"command"`
 	Timeout         int    `json:"timeout"`
+	Name            string `json:"name"`
 }
 
 func (t *Tools) Run(ctx context.Context, name, arguments string) string {
@@ -230,6 +265,12 @@ func (t *Tools) Run(ctx context.Context, name, arguments string) string {
 		return t.glob(args.Pattern, args.Path)
 	case "bash":
 		return t.bash(ctx, args.Command, args.Timeout)
+	case "skill":
+		body, err := t.skills.Body(args.Name)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		return body
 	}
 	return "error: unknown tool " + name
 }
@@ -284,6 +325,9 @@ func Summary(name, arguments string) string {
 
 	case "bash":
 		return "run: " + firstLine(args.Command, 100)
+
+	case "skill":
+		return "skill: " + args.Name
 	}
 	return "error: unknown tool " + name
 }
